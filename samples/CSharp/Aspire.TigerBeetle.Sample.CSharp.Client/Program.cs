@@ -6,7 +6,12 @@ var builder = WebApplication.CreateBuilder(args);
 
 var clusterId = builder.Configuration["TIGERBEETLE_CLUSTERID"]
     ?? throw new InvalidOperationException("TIGERBEETLE_CLUSTERID is required.");
-var addresses = builder.Configuration["TIGERBEETLE_ADDRESSES"]
+var addressConfiguration = builder.Configuration.GetSection("TIGERBEETLE_ADDRESSES");
+var addresses = (addressConfiguration.GetChildren().Any()
+    ? addressConfiguration.Get<string[]>()
+    : addressConfiguration.Value?.Split(
+        ',',
+        StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
     ?? throw new InvalidOperationException("TIGERBEETLE_ADDRESSES is required.");
 var resolvedAddresses = await ResolveAddressesAsync(
     addresses,
@@ -21,7 +26,7 @@ var app = builder.Build();
 app.MapGet("/", () => Results.Ok(new
 {
     clusterId,
-    addresses,
+    addresses = string.Join(',', addresses),
     message = "TigerBeetle connection properties were injected by Aspire."
 }));
 
@@ -34,9 +39,9 @@ app.MapGet("/accounts/{id}", async (string id, Client client) =>
 
 app.Run();
 
-static async Task<string[]> ResolveAddressesAsync(string value, CancellationToken cancellationToken)
+static async Task<string[]> ResolveAddressesAsync(string[] values, CancellationToken cancellationToken)
 {
-    var addresses = value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+    var addresses = values.ToArray();
 
     for (var index = 0; index < addresses.Length; index++)
     {

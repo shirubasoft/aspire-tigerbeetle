@@ -34,6 +34,6 @@ This repository contains an Aspire hosting integration for TigerBeetle, its test
 
 - `dotnet format Aspire.TigerBeetle.slnx --verify-no-changes`
 - `dotnet test Aspire.TigerBeetle.slnx --configuration Release`
-- Both sample clients read `TIGERBEETLE_CLUSTERID` and `TIGERBEETLE_ADDRESSES` and complete `lookupAccounts` against the managed resource.
+- The C# sample binds indexed `TIGERBEETLE_ADDRESSES__N` values to `string[]`; the TypeScript sample reads scalar `TIGERBEETLE_ADDRESSES`. Both read `TIGERBEETLE_CLUSTERID` and complete `lookupAccounts` against the managed resource.
 - Docker Compose output contains the TigerBeetle image, data volume, format/start command, and `security_opt: seccomp=unconfined`.
 - Package metadata, XML documentation, README examples, and TypeScript exports match the public API.

@@ -125,10 +125,13 @@ Aspire's polyglot resource contract exposes each value separately. For a resourc
 | `TIGERBEETLE_PORT` | `43127` | Primary endpoint port |
 | `TIGERBEETLE_CLUSTERID` | `0` | TigerBeetle cluster ID |
 | `TIGERBEETLE_ADDRESSES` | `127.0.0.1:43127` | Comma-separated client addresses |
+| `TIGERBEETLE_ADDRESSES__0` | `127.0.0.1:43127` | First client address; subsequent addresses use `__1`, `__2`, and so on |
 
 The prefix comes from the resource name. A resource named `ledger` produces `LEDGER_HOST`, `LEDGER_PORT`, `LEDGER_CLUSTERID`, and `LEDGER_ADDRESSES`.
 
 TigerBeetle clients take a cluster ID and address array as separate constructor values. They do not define a native connection-string format, so applications should read `ClusterId` and `Addresses` directly instead of parsing a package-specific string.
+
+`TIGERBEETLE_ADDRESSES` is the language-neutral value used by Node.js, Python, Go, and other consumers. The indexed companions are also emitted so .NET's configuration binder can materialize the same ordered list as a `string[]`. Both representations come from the same resource model.
 
 The resource still implements Aspire's `IResourceWithConnectionString` contract for dashboard display, manifest compatibility, and consumers that explicitly request `ConnectionStrings__tigerbeetle`. That compatibility value is `ClusterID=<u128>;Addresses=<address>[,<address>...]`; it is not the recommended client API.
 
@@ -144,18 +147,20 @@ using TigerBeetle;
 
 var clusterId = builder.Configuration["TIGERBEETLE_CLUSTERID"]
     ?? throw new InvalidOperationException("TIGERBEETLE_CLUSTERID is required.");
-var addresses = builder.Configuration["TIGERBEETLE_ADDRESSES"]
+var addressConfiguration = builder.Configuration.GetSection("TIGERBEETLE_ADDRESSES");
+var replicaAddresses = (addressConfiguration.GetChildren().Any()
+    ? addressConfiguration.Get<string[]>()
+    : addressConfiguration.Value?.Split(
+        ',',
+        StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
     ?? throw new InvalidOperationException("TIGERBEETLE_ADDRESSES is required.");
-
-var replicaAddresses = addresses
-    .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
 
 builder.Services.AddSingleton(new Client(
     clusterID: UInt128.Parse(clusterId, CultureInfo.InvariantCulture),
     addresses: replicaAddresses));
 ```
 
-The published-container case needs a DNS-to-IP step before `new Client(...)`. The repository sample includes that step in [`samples/CSharp/Aspire.TigerBeetle.Sample.CSharp.Client/Program.cs`](samples/CSharp/Aspire.TigerBeetle.Sample.CSharp.Client/Program.cs).
+The indexed form uses .NET's environment-variable hierarchy convention: `__0` maps to configuration key `:0`. The example falls back to splitting the scalar when an external configuration provides no indexed children. The published-container case also needs a DNS-to-IP step before `new Client(...)`. The repository sample includes that step in [`samples/CSharp/Aspire.TigerBeetle.Sample.CSharp.Client/Program.cs`](samples/CSharp/Aspire.TigerBeetle.Sample.CSharp.Client/Program.cs).
 
 Create one `Client` and share it. The official client is thread-safe and combines concurrent work into batches.
 

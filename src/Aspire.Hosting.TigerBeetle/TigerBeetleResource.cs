@@ -19,6 +19,8 @@ public sealed class TigerBeetleResource([ResourceName] string name)
     public const int DefaultPort = 3000;
 
     private EndpointReference? _primaryEndpoint;
+    private string? _clientAddresses;
+    private IReadOnlyList<ReferenceExpression>? _clientAddressExpressions;
 
     /// <summary>Gets the TCP endpoint used by TigerBeetle clients.</summary>
     public EndpointReference PrimaryEndpoint =>
@@ -45,7 +47,15 @@ public sealed class TigerBeetleResource([ResourceName] string name)
     /// <summary>
     /// Gets the optional client addresses exposed to consuming applications. When unset, Aspire's allocated endpoint is used.
     /// </summary>
-    public string? ClientAddresses { get; internal set; }
+    public string? ClientAddresses
+    {
+        get => _clientAddresses;
+        internal set
+        {
+            _clientAddresses = value;
+            _clientAddressExpressions = null;
+        }
+    }
 
     /// <summary>Gets the configured data-file path inside the container.</summary>
     public string DataFile =>
@@ -68,6 +78,14 @@ public sealed class TigerBeetleResource([ResourceName] string name)
         ? ReferenceExpression.Create($"{addresses}")
         : ReferenceExpression.Create($"{Host}:{Port}");
 
+    /// <summary>Gets each ordered TigerBeetle client address as a separate late-bound expression.</summary>
+    /// <remarks>
+    /// These expressions back the indexed <c>Addresses__0</c>, <c>Addresses__1</c>, and subsequent
+    /// connection properties used by .NET configuration array binding.
+    /// </remarks>
+    public IReadOnlyList<ReferenceExpression> ClientAddressExpressions =>
+        _clientAddressExpressions ??= CreateClientAddressExpressions();
+
     /// <inheritdoc />
     public ReferenceExpression ConnectionStringExpression =>
         ReferenceExpression.Create($"ClusterID={ClusterIdExpression};Addresses={ClientAddressesExpression}");
@@ -79,6 +97,12 @@ public sealed class TigerBeetleResource([ResourceName] string name)
         yield return new("Port", ReferenceExpression.Create($"{Port}"));
         yield return new("ClusterId", ClusterIdExpression);
         yield return new("Addresses", ClientAddressesExpression);
+
+        var clientAddresses = ClientAddressExpressions;
+        for (var index = 0; index < clientAddresses.Count; index++)
+        {
+            yield return new($"Addresses__{index}", clientAddresses[index]);
+        }
     }
 
     internal string? ExplicitDataFile { get; set; }
@@ -86,4 +110,11 @@ public sealed class TigerBeetleResource([ResourceName] string name)
     internal IList<string> AdditionalFormatArguments { get; } = [];
 
     internal IList<string> AdditionalStartArguments { get; } = [];
+
+    private IReadOnlyList<ReferenceExpression> CreateClientAddressExpressions() => ClientAddresses is { Length: > 0 } addresses
+        ? addresses
+            .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .Select(address => ReferenceExpression.Create($"{address}"))
+            .ToArray()
+        : [ReferenceExpression.Create($"{Host}:{Port}")];
 }

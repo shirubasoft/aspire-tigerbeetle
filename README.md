@@ -95,14 +95,16 @@ import { createBuilder } from './.aspire/modules/aspire.mjs';
 
 const builder = await createBuilder();
 
-const tigerBeetle = await builder.addTigerBeetle('tigerbeetle');
-await tigerBeetle.withDataVolume();
-await tigerBeetle.withCacheGrid('256MiB');
+const tigerBeetle = await builder
+  .addTigerBeetle('tigerbeetle')
+  .withDataVolume()
+  .withCacheGrid('256MiB');
 
-const client = await builder.addNodeApp('client', './client', 'dist/index.js');
-await client.withReference(tigerBeetle);
-await client.waitFor(tigerBeetle);
-await client.withHttpEndpoint({ env: 'PORT' });
+await builder
+  .addNodeApp('client', './client', 'dist/index.js')
+  .withReference(tigerBeetle)
+  .waitFor(tigerBeetle)
+  .withHttpEndpoint({ env: 'PORT' });
 
 await builder.build().run();
 ```
@@ -191,15 +193,15 @@ The C# names appear in PascalCase. Aspire exports equivalent camelCase methods t
 | Method | Default or example | Behavior |
 | --- | --- | --- |
 | `AddTigerBeetle(name, port: null)` | Dynamic host port, container port `3000` | Adds one `ghcr.io/tigerbeetle/tigerbeetle:0.17.9` container, enables development mode, adds the TCP health check, and adds `seccomp=unconfined` to local container runtime arguments |
-| `WithClusterId(clusterId)` | `"0"` | Sets the unsigned 128-bit decimal cluster ID used by `format` and exposed through the `ClusterId` connection property. Cluster ID `0` is for tests and development |
+| `WithClusterId(clusterId)` | `"0"` | Sets the unsigned 128-bit cluster ID used by `format` and exposed through the `ClusterId` connection property. C# accepts `UInt128` or a decimal string. TypeScript accepts a decimal string. Cluster ID `0` is for tests and development |
 | `WithReplica(replicaIndex, replicaCount)` | `0, 1` | Sets this replica's zero-based index and cluster size. The integration accepts 1 through 6 replicas |
-| `WithAddresses(addresses)` | `"0.0.0.0:3000"` for server startup | Sets the ordered numeric addresses passed to `tigerbeetle start` and also uses them as client addresses |
+| `WithAddresses(addresses)` | `"0.0.0.0:3000"` for server startup | Sets one ordered numeric address per replica for `tigerbeetle start` and also uses them as client addresses. A numeric IP may omit its port, and a bare port may omit the default IP |
 | `WithClientAddresses(addresses)` | Aspire allocated endpoint | Overrides only the client address list. Use it when listen and client addresses differ |
 | `WithCacheGrid(size)` | TigerBeetle default | Passes a value such as `256MiB` or `12GiB` to `--cache-grid` |
 | `WithDevelopmentMode(enabled)` | `true` | Adds or removes `--development` from both `format` and `start` |
 | `WithDataFile(path)` | `/data/{clusterId}_{replicaIndex}.tigerbeetle` | Sets an absolute data-file path inside the container |
-| `WithDataVolume(name, isReadOnly)` | Generated volume name, writable | Mounts a named volume at `/data` |
-| `WithDataBindMount(source, isReadOnly)` | No bind mount | Mounts a host directory at `/data` |
+| `WithDataVolume(name, isReadOnly)` | Generated volume name, writable | Mounts a named volume at `/data`. TigerBeetle rejects a read-only data volume |
+| `WithDataBindMount(source, isReadOnly)` | No bind mount | Mounts a host directory at `/data`. TigerBeetle rejects a read-only data bind mount |
 | `WithStatsD(ipAddress, port)` | Port `8125` | Enables TigerBeetle's experimental StatsD output with `--experimental --statsd=...`. The host must be a numeric IP |
 | `WithFormatArgument(argument)` | None | Appends one shell-quoted raw argument to `tigerbeetle format` |
 | `WithStartArgument(argument)` | None | Appends one shell-quoted raw argument to `tigerbeetle start` |
@@ -207,10 +209,11 @@ The C# names appear in PascalCase. Aspire exports equivalent camelCase methods t
 TypeScript represents optional .NET parameters as options objects. For example:
 
 ```typescript
-const tigerBeetle = await builder.addTigerBeetle('tigerbeetle', { port: 3000 });
-await tigerBeetle.withDataVolume({ name: 'tigerbeetle-data' });
-await tigerBeetle.withDevelopmentMode({ enabled: false });
-await tigerBeetle.withStatsD('10.0.0.20', { port: 9125 });
+const tigerBeetle = await builder
+  .addTigerBeetle('tigerbeetle', { port: 3000 })
+  .withDataVolume({ name: 'tigerbeetle-data' })
+  .withDevelopmentMode({ enabled: false })
+  .withStatsD('10.0.0.20', { port: 9125 });
 ```
 
 TigerBeetle keeps most advanced server flags behind `--experimental`. Prefer the typed methods for stable options. Use raw arguments only after checking the CLI for the pinned TigerBeetle release.
@@ -251,7 +254,7 @@ The automatic format-if-missing behavior is intended for first startup and singl
 
 ## Health checks
 
-The integration registers a five-second TCP health check. It connects to the first exported client address and reports healthy when the socket accepts a connection.
+The integration registers a five-second TCP health check. It connects to the resource's Aspire-managed primary endpoint and reports healthy when the socket accepts a connection. Client-address overrides do not change which local replica Aspire probes. Unhealthy results include the attempted host and port.
 
 This proves that the process is listening. It does not prove that a replicated cluster can commit a request. TigerBeetle has no HTTP health endpoint. For production monitoring, enable StatsD and monitor at least:
 
@@ -303,9 +306,16 @@ aspire stop --apphost samples/TypeScript --non-interactive
 
 ## Publish a container manifest
 
-The C# sample includes `Aspire.Hosting.Docker` and adds a Docker Compose environment:
+The C# sample includes `Aspire.Hosting.Docker`. Configure the TigerBeetle service's seccomp option and add a Docker Compose environment in the AppHost:
 
 ```csharp
+var tigerBeetle = builder.AddTigerBeetle("tigerbeetle")
+    .WithDataVolume()
+    .PublishAsDockerComposeService((_, service) =>
+    {
+        service.SecurityOpt.Add("seccomp=unconfined");
+    });
+
 builder.AddDockerComposeEnvironment("docker");
 ```
 
@@ -320,7 +330,7 @@ aspire publish \
 
 Aspire writes the Compose project under `artifacts/docker`. The manifest contains the TigerBeetle image, startup command, TCP binding, volume, and injected connection values.
 
-The integration adds `--security-opt seccomp=unconfined` to local Aspire container runs. Container runtime arguments are not portable across every Aspire publisher. Check the generated deployment and target platform. Docker 25 and later blocks the `io_uring` calls TigerBeetle needs unless the container has a suitable seccomp profile. For Docker Compose, the TigerBeetle service normally needs:
+The integration adds `--security-opt seccomp=unconfined` to local Aspire container runs. The `PublishAsDockerComposeService` callback above adds the equivalent setting to the published Compose service. Container runtime arguments are not portable across every Aspire publisher. Check the generated deployment and target platform. Docker 25 and later blocks the `io_uring` calls TigerBeetle needs unless the container has a suitable seccomp profile. The generated service should contain:
 
 ```yaml
 security_opt:

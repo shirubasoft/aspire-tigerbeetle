@@ -1,8 +1,10 @@
 #pragma warning disable CS0618 // Aspire's public test inspection helpers are obsolete in favor of a lower-level configuration builder.
 
+using System.Net;
 using System.Net.Sockets;
 using Aspire.Hosting.ApplicationModel;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Xunit;
 
 namespace Aspire.Hosting.TigerBeetle.Tests;
@@ -172,6 +174,19 @@ public sealed class TigerBeetleResourceTests
     }
 
     [Fact]
+    public async Task WithClusterIdAcceptsUInt128Values()
+    {
+        var builder = DistributedApplication.CreateBuilder();
+        var tigerBeetle = builder.AddTigerBeetle("tigerbeetle")
+            .WithClusterId(UInt128.MaxValue);
+
+        var arguments = await tigerBeetle.Resource.GetArgumentValuesAsync();
+
+        Assert.Equal(UInt128.MaxValue.ToString(), tigerBeetle.Resource.ClusterId);
+        Assert.Contains($"--cluster='{UInt128.MaxValue}'", arguments[1]);
+    }
+
+    [Fact]
     public void PersistenceMethodsUseTheTigerBeetleDataDirectory()
     {
         var builder = DistributedApplication.CreateBuilder();
@@ -182,11 +197,40 @@ public sealed class TigerBeetleResourceTests
         Assert.Equal(TigerBeetleResource.DataDirectory, volumeMount.Target);
         Assert.False(volumeMount.IsReadOnly);
 
-        var bind = builder.AddTigerBeetle("bind").WithDataBindMount("./data", isReadOnly: true);
+        var bind = builder.AddTigerBeetle("bind").WithDataBindMount("./data");
         var bindMount = Assert.Single(bind.Resource.Annotations.OfType<ContainerMountAnnotation>());
         Assert.EndsWith(Path.Combine("data"), bindMount.Source, StringComparison.Ordinal);
         Assert.Equal(TigerBeetleResource.DataDirectory, bindMount.Target);
-        Assert.True(bindMount.IsReadOnly);
+        Assert.False(bindMount.IsReadOnly);
+    }
+
+    [Fact]
+    public void PersistenceMethodsRejectReadOnlyMounts()
+    {
+        var builder = DistributedApplication.CreateBuilder();
+
+        var volume = builder.AddTigerBeetle("volume");
+        var volumeException = Assert.Throws<ArgumentException>(() => volume.WithDataVolume(isReadOnly: true));
+        Assert.Equal("isReadOnly", volumeException.ParamName);
+        Assert.Contains("must be writable", volumeException.Message, StringComparison.Ordinal);
+
+        var bind = builder.AddTigerBeetle("bind");
+        var bindException = Assert.Throws<ArgumentException>(() => bind.WithDataBindMount("./data", isReadOnly: true));
+        Assert.Equal("isReadOnly", bindException.ParamName);
+        Assert.Contains("must be writable", bindException.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(" ")]
+    public void WithDataVolumeRejectsBlankExplicitNames(string name)
+    {
+        var builder = DistributedApplication.CreateBuilder();
+        var tigerBeetle = builder.AddTigerBeetle("tigerbeetle");
+
+        var exception = Assert.Throws<ArgumentException>(() => tigerBeetle.WithDataVolume(name));
+
+        Assert.Equal("name", exception.ParamName);
     }
 
     [Theory]
@@ -218,6 +262,9 @@ public sealed class TigerBeetleResourceTests
     [InlineData("tigerbeetle:3000")]
     [InlineData("10.0.0.1:0")]
     [InlineData("10.0.0.1:65536")]
+    [InlineData("3000,")]
+    [InlineData(",3000")]
+    [InlineData("3000,,3001")]
     public void WithAddressesRejectsDnsNamesAndInvalidPorts(string value)
     {
         var builder = DistributedApplication.CreateBuilder();
@@ -226,11 +273,46 @@ public sealed class TigerBeetleResourceTests
         Assert.Throws<ArgumentException>(() => tigerBeetle.WithAddresses(value));
     }
 
+    [Theory]
+    [InlineData("3000")]
+    [InlineData("127.0.0.1")]
+    [InlineData("127.0.0.1:3000")]
+    [InlineData("2001:db8::1")]
+    [InlineData("[2001:db8::1]:3000")]
+    public async Task WithAddressesAcceptsTigerBeetleNumericAddressForms(string value)
+    {
+        var builder = DistributedApplication.CreateBuilder();
+        var tigerBeetle = builder.AddTigerBeetle("tigerbeetle")
+            .WithAddresses(value);
+
+        var arguments = await tigerBeetle.Resource.GetArgumentValuesAsync();
+
+        Assert.Contains($"--addresses='{value}'", arguments[1]);
+    }
+
+    [Fact]
+    public async Task StartupRejectsAnAddressCountThatDoesNotMatchReplicaCount()
+    {
+        var builder = DistributedApplication.CreateBuilder();
+        var tigerBeetle = builder.AddTigerBeetle("tigerbeetle")
+            .WithReplica(replicaIndex: 0, replicaCount: 3)
+            .WithAddresses("3000,3001");
+
+        var exception = await Assert.ThrowsAsync<DistributedApplicationException>(async () =>
+        {
+            _ = await tigerBeetle.Resource.GetArgumentValuesAsync();
+        });
+
+        Assert.Contains("has 2 server address(es), but its replica count is 3", exception.Message, StringComparison.Ordinal);
+        Assert.Contains(nameof(TigerBeetleResourceBuilderExtensions.WithAddresses), exception.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task WithAddressesAcceptsBracketedIpv6Endpoints()
     {
         var builder = DistributedApplication.CreateBuilder();
         var tigerBeetle = builder.AddTigerBeetle("tigerbeetle")
+            .WithReplica(replicaIndex: 0, replicaCount: 2)
             .WithAddresses("[2001:db8::1]:3000,[2001:db8::2]:3000");
 
         Assert.Equal(
@@ -240,5 +322,39 @@ public sealed class TigerBeetleResourceTests
             ["[2001:db8::1]:3000", "[2001:db8::2]:3000"],
             await Task.WhenAll(tigerBeetle.Resource.ClientAddressExpressions.Select(
                 expression => expression.GetValueAsync(TestContext.Current.CancellationToken).AsTask())));
+    }
+
+    [Fact]
+    public async Task TcpHealthCheckReportsThePrimaryEndpointItReached()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        var healthCheck = new TigerBeetleTcpHealthCheck(() => ("127.0.0.1", port));
+
+        var result = await healthCheck.CheckHealthAsync(
+            new HealthCheckContext(),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(HealthStatus.Healthy, result.Status);
+        Assert.Contains($"'127.0.0.1:{port}'", result.Description, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task TcpHealthCheckReportsTheUnavailablePrimaryEndpoint()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        listener.Stop();
+        var healthCheck = new TigerBeetleTcpHealthCheck(() => ("127.0.0.1", port));
+
+        var result = await healthCheck.CheckHealthAsync(
+            new HealthCheckContext(),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(HealthStatus.Unhealthy, result.Status);
+        Assert.Contains($"'127.0.0.1:{port}'", result.Description, StringComparison.Ordinal);
+        Assert.NotNull(result.Exception);
     }
 }

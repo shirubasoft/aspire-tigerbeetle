@@ -7,7 +7,7 @@ namespace Aspire.Hosting.ApplicationModel;
 /// </summary>
 [AspireExport]
 public sealed class TigerBeetleResource([ResourceName] string name)
-    : ContainerResource(name), IResourceWithConnectionString
+    : ContainerResource(name), IResourceWithCustomWithReference<TigerBeetleResource>
 {
     /// <summary>The name of the TigerBeetle TCP endpoint.</summary>
     public const string PrimaryEndpointName = "tcp";
@@ -86,11 +86,7 @@ public sealed class TigerBeetleResource([ResourceName] string name)
     public IReadOnlyList<ReferenceExpression> ClientAddressExpressions =>
         _clientAddressExpressions ??= CreateClientAddressExpressions();
 
-    /// <inheritdoc />
-    public ReferenceExpression ConnectionStringExpression =>
-        ReferenceExpression.Create($"ClusterID={ClusterIdExpression};Addresses={ClientAddressesExpression}");
-
-    /// <inheritdoc />
+    /// <summary>Gets the structured properties injected when another resource references TigerBeetle.</summary>
     public IEnumerable<KeyValuePair<string, ReferenceExpression>> GetConnectionProperties()
     {
         yield return new("Host", ReferenceExpression.Create($"{Host}"));
@@ -110,6 +106,31 @@ public sealed class TigerBeetleResource([ResourceName] string name)
     internal IList<string> AdditionalFormatArguments { get; } = [];
 
     internal IList<string> AdditionalStartArguments { get; } = [];
+
+    static IResourceBuilder<TDestination>? IResourceWithCustomWithReference<TigerBeetleResource>.TryWithReference<TDestination>(
+        IResourceBuilder<TDestination> builder,
+        IResourceBuilder<IResource> source,
+        string? connectionName,
+        bool optional,
+        string? name)
+    {
+        if (source is not IResourceBuilder<TigerBeetleResource> tigerBeetleSource)
+        {
+            return null;
+        }
+
+        if (optional)
+        {
+            throw new InvalidOperationException("Optional references are not supported for TigerBeetle resources.");
+        }
+
+        if (name is not null)
+        {
+            throw new InvalidOperationException("Named service references are not supported for TigerBeetle resources.");
+        }
+
+        return TigerBeetleResourceBuilderExtensions.WithReference(builder, tigerBeetleSource, connectionName);
+    }
 
     private IReadOnlyList<ReferenceExpression> CreateClientAddressExpressions() => ClientAddresses is { Length: > 0 } addresses
         ? addresses

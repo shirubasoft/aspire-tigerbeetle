@@ -133,7 +133,7 @@ TigerBeetle clients take a cluster ID and address array as separate constructor 
 
 `TIGERBEETLE_ADDRESSES` is the language-neutral value used by Node.js, Python, Go, and other consumers. The indexed companions are also emitted so .NET's configuration binder can materialize the same ordered list as a `string[]`. Both representations come from the same resource model.
 
-The resource still implements Aspire's `IResourceWithConnectionString` contract for dashboard display, manifest compatibility, and consumers that explicitly request `ConnectionStrings__tigerbeetle`. That compatibility value is `ClusterID=<u128>;Addresses=<address>[,<address>...]`; it is not the recommended client API.
+The custom `WithReference` integration intentionally does not inject `ConnectionStrings__tigerbeetle`. TigerBeetle has no native value for that variable, and inventing one would force every client to implement a package-specific parser.
 
 TigerBeetle `0.17.9` accepts numeric IPv4 addresses, bracketed IPv6 addresses, or a bare port. It does not accept DNS names. Aspire may publish a service address such as `tigerbeetle:3000`, so applications running from a published manifest must resolve the host to a numeric address before constructing an official TigerBeetle client.
 

@@ -45,20 +45,21 @@ public sealed class TigerBeetleResourceTests
     }
 
     [Fact]
-    public async Task ConnectionStringUsesTheAllocatedIpv4Endpoint()
+    public async Task StructuredPropertiesUseTheAllocatedEndpoint()
     {
         var builder = DistributedApplication.CreateBuilder();
         var tigerBeetle = builder.AddTigerBeetle("tigerbeetle")
             .WithEndpoint(TigerBeetleResource.PrimaryEndpointName, endpoint =>
                 endpoint.AllocatedEndpoint = new AllocatedEndpoint(endpoint, "127.0.0.1", 4567));
 
-        var connectionString = await ((IResourceWithConnectionString)tigerBeetle.Resource)
-            .GetConnectionStringAsync(TestContext.Current.CancellationToken);
+        var properties = tigerBeetle.Resource.GetConnectionProperties()
+            .ToDictionary(property => property.Key, property => property.Value);
 
-        Assert.Equal("ClusterID=0;Addresses=127.0.0.1:4567", connectionString);
-        Assert.Equal(
-            "ClusterID=0;Addresses={tigerbeetle.bindings.tcp.host}:{tigerbeetle.bindings.tcp.port}",
-            tigerBeetle.Resource.ConnectionStringExpression.ValueExpression);
+        Assert.DoesNotContain(typeof(IResourceWithConnectionString), typeof(TigerBeetleResource).GetInterfaces());
+        Assert.Equal("127.0.0.1", await properties["Host"].GetValueAsync(TestContext.Current.CancellationToken));
+        Assert.Equal("4567", await properties["Port"].GetValueAsync(TestContext.Current.CancellationToken));
+        Assert.Equal("0", await properties["ClusterId"].GetValueAsync(TestContext.Current.CancellationToken));
+        Assert.Equal("127.0.0.1:4567", await properties["Addresses"].GetValueAsync(TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -73,7 +74,7 @@ public sealed class TigerBeetleResourceTests
 
         var environment = await consumer.Resource.GetEnvironmentVariableValuesAsync();
 
-        Assert.Equal("ClusterID=0;Addresses=127.0.0.1:4567", environment["ConnectionStrings__tigerbeetle"]);
+        Assert.DoesNotContain("ConnectionStrings__tigerbeetle", environment.Keys);
         Assert.Equal("127.0.0.1", environment["TIGERBEETLE_HOST"]);
         Assert.Equal("4567", environment["TIGERBEETLE_PORT"]);
         Assert.Equal("0", environment["TIGERBEETLE_CLUSTERID"]);
@@ -94,6 +95,23 @@ public sealed class TigerBeetleResourceTests
         var boundAddresses = configuration.GetSection("TIGERBEETLE_ADDRESSES").Get<string[]>();
         Assert.NotNull(boundAddresses);
         Assert.Equal(["127.0.0.1:4567"], boundAddresses);
+    }
+
+    [Fact]
+    public async Task WithReferenceSupportsAnEncodedPropertyPrefix()
+    {
+        var builder = DistributedApplication.CreateBuilder();
+        var tigerBeetle = builder.AddTigerBeetle("tigerbeetle")
+            .WithEndpoint(TigerBeetleResource.PrimaryEndpointName, endpoint =>
+                endpoint.AllocatedEndpoint = new AllocatedEndpoint(endpoint, "127.0.0.1", 4567));
+        var consumer = builder.AddExecutable("consumer", "echo", ".")
+            .WithReference(tigerBeetle, "ledger-east");
+
+        var environment = await consumer.Resource.GetEnvironmentVariableValuesAsync();
+
+        Assert.Equal("0", environment["LEDGER_EAST_CLUSTERID"]);
+        Assert.Equal("127.0.0.1:4567", environment["LEDGER_EAST_ADDRESSES"]);
+        Assert.DoesNotContain(environment.Keys, key => key.StartsWith("ConnectionStrings__", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -146,9 +164,11 @@ public sealed class TigerBeetleResourceTests
         Assert.DoesNotContain("--development", script);
         Assert.EndsWith("'/var/lib/tigerbeetle/data.tigerbeetle'", script, StringComparison.Ordinal);
         Assert.Equal(
-            "ClusterID=340282366920938463463374607431768211455;Addresses=10.0.0.10:3000,10.0.0.11:3000,10.0.0.12:3000",
-            await ((IResourceWithConnectionString)tigerBeetle.Resource)
-                .GetConnectionStringAsync(TestContext.Current.CancellationToken));
+            "340282366920938463463374607431768211455",
+            await tigerBeetle.Resource.ClusterIdExpression.GetValueAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(
+            "10.0.0.10:3000,10.0.0.11:3000,10.0.0.12:3000",
+            await tigerBeetle.Resource.ClientAddressesExpression.GetValueAsync(TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -214,8 +234,11 @@ public sealed class TigerBeetleResourceTests
             .WithAddresses("[2001:db8::1]:3000,[2001:db8::2]:3000");
 
         Assert.Equal(
-            "ClusterID=0;Addresses=[2001:db8::1]:3000,[2001:db8::2]:3000",
-            await ((IResourceWithConnectionString)tigerBeetle.Resource)
-                .GetConnectionStringAsync(TestContext.Current.CancellationToken));
+            "[2001:db8::1]:3000,[2001:db8::2]:3000",
+            await tigerBeetle.Resource.ClientAddressesExpression.GetValueAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(
+            ["[2001:db8::1]:3000", "[2001:db8::2]:3000"],
+            await Task.WhenAll(tigerBeetle.Resource.ClientAddressExpressions.Select(
+                expression => expression.GetValueAsync(TestContext.Current.CancellationToken).AsTask())));
     }
 }

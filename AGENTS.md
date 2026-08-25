@@ -14,13 +14,13 @@ This repository contains an Aspire hosting integration for TigerBeetle, its test
 ## Implementation rules
 
 - Keep the versions in `global.json`, `Directory.Packages.props`, `.config/dotnet-tools.json`, and the TypeScript Aspire configuration compatible.
-- Preserve the compatibility connection-string expression: `ClusterID=<u128>;Addresses=<address>[,<address>...]`. Consumer samples and guidance must use the structured `Host`, `Port`, `ClusterId`, and `Addresses` connection properties instead of parsing it.
+- Do not add a synthetic `ConnectionStrings__*` value. TigerBeetle clients consume the structured `Host`, `Port`, `ClusterId`, and `Addresses` properties.
 - TigerBeetle clients require numeric IP addresses. Samples may receive Aspire service DNS names after deployment, so they must resolve those names before constructing the official client.
 - Keep `--development` consistent between `tigerbeetle format` and `tigerbeetle start`.
 - The default resource is one development replica. Do not imply that a generic container deployment satisfies TigerBeetle's production topology, storage, memory-locking, or network requirements.
 - Local container startup needs `seccomp=unconfined`. Deployment targets need the equivalent target-specific security configuration.
 - Public C# AppHost APIs and types must carry `[AspireExport]` so the generated TypeScript SDK exposes them.
-- Add tests for every public builder method and any change to the generated startup command or connection-string expression.
+- Add tests for every public builder method and any change to the generated startup command or structured reference properties.
 - Keep all samples runnable without private services or credentials. A sample health check must include a real TigerBeetle client operation, not only a TCP connection.
 
 ## Release rules

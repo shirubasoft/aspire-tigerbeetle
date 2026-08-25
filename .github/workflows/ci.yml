@@ -1,0 +1,194 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  repository-lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Require repository agent guidance
+        shell: bash
+        run: test -s AGENTS.md
+
+      - name: Validate workflows with actionlint 1.7.12
+        uses: docker://rhysd/actionlint:1.7.12
+        with:
+          args: >-
+            -color
+            .github/workflows/ci.yml
+            .github/workflows/prerelease-packages.yml
+            .github/workflows/publish.yml
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install locked release tooling
+        run: npm ci
+
+      - name: Check Markdown, YAML, JSON, and release scripts
+        run: npm run lint
+
+      - name: Test release tooling and artifact contracts
+        run: npm test
+
+  release-version:
+    if: >-
+      vars.NUGET_PUBLISH_ENABLED == 'true' &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.release-version.outputs.version }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install locked release tooling
+        run: npm ci
+
+      - name: Bootstrap pre-1.0 version baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! git describe --tags --abbrev=0 --match 'v[0-9]*' >/dev/null 2>&1; then
+            git tag v0.0.0 "$(git rev-list --max-parents=0 HEAD | tail -n 1)"
+          fi
+
+      - name: Calculate release version
+        id: release-version
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEXT_RELEASE_VERSION_FILE: ${{ runner.temp }}/next-release-version
+        run: |
+          set -euo pipefail
+          node_modules/.bin/semantic-release --dry-run
+          if [[ -f "$NEXT_RELEASE_VERSION_FILE" ]]; then
+            echo "version=$(<"$NEXT_RELEASE_VERSION_FILE")" >> "$GITHUB_OUTPUT"
+          fi
+
+  build-test-pack:
+    needs: release-version
+    if: >-
+      always() &&
+      (needs.release-version.result == 'success' || needs.release-version.result == 'skipped')
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            samples/TypeScript/package-lock.json
+            samples/TypeScript/client/package-lock.json
+
+      - name: Validate, test, and pack on Linux
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.release-version.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$RELEASE_VERSION" ]]; then
+            ./build.sh --package-version "$RELEASE_VERSION"
+            printf '%s\n' "$RELEASE_VERSION" > artifacts/release-version.txt
+          else
+            ./build.sh
+          fi
+
+      - name: Validate, test, and pack on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ needs.release-version.outputs.version }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:RELEASE_VERSION)) {
+            ./build.ps1
+          }
+          else {
+            ./build.ps1 -PackageVersion $env:RELEASE_VERSION
+          }
+
+      - name: Upload packages
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v7
+        with:
+          name: nuget-packages
+          path: |
+            artifacts/*.nupkg
+            artifacts/*.snupkg
+            artifacts/release-version.txt
+          if-no-files-found: error
+
+  container-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ASPIRE_CONTAINER_RUNTIME: docker
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            samples/TypeScript/package-lock.json
+            samples/TypeScript/client/package-lock.json
+
+      - name: Validate both connection-string samples
+        run: ./build.sh --containers

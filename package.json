@@ -1,0 +1,18 @@
+{
+  "name": "aspire-tigerbeetle-release",
+  "private": true,
+  "scripts": {
+    "lint": "npm run lint:format && npm run lint:markdown",
+    "lint:format": "prettier --check \".config/*.json\" \".github/**/*.{yml,yaml}\" \"scripts/release/**/*.{jsonc,mjs}\" \".releaserc.json\" \"package*.json\"",
+    "lint:markdown": "markdownlint-cli2 --config scripts/release/markdownlint.jsonc \"*.md\"",
+    "test": "node --test scripts/release/*.test.mjs"
+  },
+  "devDependencies": {
+    "@semantic-release/exec": "7.1.0",
+    "conventional-changelog-conventionalcommits": "10.4.0",
+    "markdownlint-cli2": "0.23.2",
+    "prettier": "3.9.6",
+    "semantic-release": "25.0.9",
+    "semver": "7.8.5"
+  }
+}

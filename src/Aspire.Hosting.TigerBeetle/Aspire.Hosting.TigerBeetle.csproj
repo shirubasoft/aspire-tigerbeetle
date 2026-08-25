@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>Shirubasoft.Aspire.Hosting.TigerBeetle</AssemblyName>
+    <RootNamespace>Aspire.Hosting.TigerBeetle</RootNamespace>
+    <PackageId>Shirubasoft.Aspire.Hosting.TigerBeetle</PackageId>
+    <Title>Aspire hosting integration for TigerBeetle</Title>
+    <Description>Runs TigerBeetle as an Aspire container resource with connection strings, persistence, health checks, TypeScript AppHost exports, and deployment manifest support.</Description>
+    <Authors>Shirubasoft</Authors>
+    <PackageTags>aspire;tigerbeetle;database;distributed-systems;container</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <RepositoryType>git</RepositoryType>
+    <RepositoryUrl>https://github.com/shirubasoft/aspire-tigerbeetle</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/shirubasoft/aspire-tigerbeetle</PackageProjectUrl>
+    <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
+    <EnablePackageValidation>true</EnablePackageValidation>
+    <EnableAspireIntegrationAnalyzers>true</EnableAspireIntegrationAnalyzers>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Aspire.Hosting" />
+    <PackageReference Include="Microsoft.SourceLink.GitHub" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="../../README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
+</Project>

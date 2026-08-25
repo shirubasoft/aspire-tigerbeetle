@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Aspire.Hosting.TigerBeetle/Aspire.Hosting.TigerBeetle.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Aspire.Hosting.TigerBeetle.Tests/Aspire.Hosting.TigerBeetle.Tests.csproj" />
+  </Folder>
+  <Folder Name="/samples/CSharp/">
+    <Project Path="samples/CSharp/Aspire.TigerBeetle.Sample.CSharp.AppHost/Aspire.TigerBeetle.Sample.CSharp.AppHost.csproj" />
+    <Project Path="samples/CSharp/Aspire.TigerBeetle.Sample.CSharp.Client/Aspire.TigerBeetle.Sample.CSharp.Client.csproj" />
+  </Folder>
+</Solution>

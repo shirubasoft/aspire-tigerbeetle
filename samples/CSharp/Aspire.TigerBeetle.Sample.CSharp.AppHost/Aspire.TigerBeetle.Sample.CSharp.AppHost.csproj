@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <Sdk Name="Aspire.AppHost.Sdk" />
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AspireUseCliBundle>true</AspireUseCliBundle>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Aspire.Hosting.Docker" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../../src/Aspire.Hosting.TigerBeetle/Aspire.Hosting.TigerBeetle.csproj"
+                      IsAspireProjectResource="false" />
+    <ProjectReference Include="../Aspire.TigerBeetle.Sample.CSharp.Client/Aspire.TigerBeetle.Sample.CSharp.Client.csproj" />
+  </ItemGroup>
+</Project>

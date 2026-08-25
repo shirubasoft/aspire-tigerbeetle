@@ -1,0 +1,14 @@
+artifacts/
+bin/
+obj/
+.aspire/
+.modules/
+.agents/
+aspire-output/
+node_modules/
+dist/
+*.user
+*.suo
+*.nupkg
+*.snupkg
+.DS_Store

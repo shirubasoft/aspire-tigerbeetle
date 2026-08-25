@@ -7,7 +7,7 @@ namespace Aspire.Hosting.ApplicationModel;
 /// </summary>
 [AspireExport]
 public sealed class TigerBeetleResource([ResourceName] string name)
-    : ContainerResource(name), IResourceWithConnectionString
+    : ContainerResource(name), IResourceWithCustomWithReference<TigerBeetleResource>
 {
     /// <summary>The name of the TigerBeetle TCP endpoint.</summary>
     public const string PrimaryEndpointName = "tcp";
@@ -19,10 +19,18 @@ public sealed class TigerBeetleResource([ResourceName] string name)
     public const int DefaultPort = 3000;
 
     private EndpointReference? _primaryEndpoint;
+    private string? _clientAddresses;
+    private IReadOnlyList<ReferenceExpression>? _clientAddressExpressions;
 
     /// <summary>Gets the TCP endpoint used by TigerBeetle clients.</summary>
     public EndpointReference PrimaryEndpoint =>
         _primaryEndpoint ??= new EndpointReference(this, PrimaryEndpointName);
+
+    /// <summary>Gets the host name or IP address used to reach the primary endpoint.</summary>
+    public EndpointReferenceExpression Host => PrimaryEndpoint.Property(EndpointProperty.Host);
+
+    /// <summary>Gets the port used to reach the primary endpoint.</summary>
+    public EndpointReferenceExpression Port => PrimaryEndpoint.Property(EndpointProperty.Port);
 
     /// <summary>Gets the cluster ID passed to TigerBeetle clients and the replica formatter.</summary>
     public string ClusterId { get; internal set; } = "0";
@@ -37,9 +45,17 @@ public sealed class TigerBeetleResource([ResourceName] string name)
     public string Addresses { get; internal set; } = $"0.0.0.0:{DefaultPort}";
 
     /// <summary>
-    /// Gets the optional client addresses used in the connection string. When unset, Aspire's allocated endpoint is used.
+    /// Gets the optional client addresses exposed to consuming applications. When unset, Aspire's allocated endpoint is used.
     /// </summary>
-    public string? ClientAddresses { get; internal set; }
+    public string? ClientAddresses
+    {
+        get => _clientAddresses;
+        internal set
+        {
+            _clientAddresses = value;
+            _clientAddressExpressions = null;
+        }
+    }
 
     /// <summary>Gets the configured data-file path inside the container.</summary>
     public string DataFile =>
@@ -54,24 +70,35 @@ public sealed class TigerBeetleResource([ResourceName] string name)
     /// <summary>Gets the optional StatsD endpoint.</summary>
     public string? StatsDEndpoint { get; internal set; }
 
-    /// <inheritdoc />
-    public ReferenceExpression ConnectionStringExpression => ClientAddresses is { Length: > 0 } addresses
-        ? ReferenceExpression.Create($"ClusterID={ClusterId};Addresses={addresses}")
-        : ReferenceExpression.Create(
-            $"ClusterID={ClusterId};Addresses={PrimaryEndpoint.Property(EndpointProperty.IPV4Host)}:{PrimaryEndpoint.Property(EndpointProperty.Port)}");
+    /// <summary>Gets the cluster ID as a late-bound connection property.</summary>
+    public ReferenceExpression ClusterIdExpression => ReferenceExpression.Create($"{ClusterId}");
 
-    /// <inheritdoc />
+    /// <summary>Gets the ordered, comma-separated addresses passed to TigerBeetle clients.</summary>
+    public ReferenceExpression ClientAddressesExpression => ClientAddresses is { Length: > 0 } addresses
+        ? ReferenceExpression.Create($"{addresses}")
+        : ReferenceExpression.Create($"{Host}:{Port}");
+
+    /// <summary>Gets each ordered TigerBeetle client address as a separate late-bound expression.</summary>
+    /// <remarks>
+    /// These expressions back the indexed <c>Addresses__0</c>, <c>Addresses__1</c>, and subsequent
+    /// connection properties used by .NET configuration array binding.
+    /// </remarks>
+    public IReadOnlyList<ReferenceExpression> ClientAddressExpressions =>
+        _clientAddressExpressions ??= CreateClientAddressExpressions();
+
+    /// <summary>Gets the structured properties injected when another resource references TigerBeetle.</summary>
     public IEnumerable<KeyValuePair<string, ReferenceExpression>> GetConnectionProperties()
     {
-        yield return new KeyValuePair<string, ReferenceExpression>(
-            "ClusterID",
-            ReferenceExpression.Create($"{ClusterId}"));
-        yield return new KeyValuePair<string, ReferenceExpression>(
-            "Addresses",
-            ClientAddresses is { Length: > 0 } addresses
-                ? ReferenceExpression.Create($"{addresses}")
-                : ReferenceExpression.Create(
-                    $"{PrimaryEndpoint.Property(EndpointProperty.IPV4Host)}:{PrimaryEndpoint.Property(EndpointProperty.Port)}"));
+        yield return new("Host", ReferenceExpression.Create($"{Host}"));
+        yield return new("Port", ReferenceExpression.Create($"{Port}"));
+        yield return new("ClusterId", ClusterIdExpression);
+        yield return new("Addresses", ClientAddressesExpression);
+
+        var clientAddresses = ClientAddressExpressions;
+        for (var index = 0; index < clientAddresses.Count; index++)
+        {
+            yield return new($"Addresses__{index}", clientAddresses[index]);
+        }
     }
 
     internal string? ExplicitDataFile { get; set; }
@@ -79,4 +106,36 @@ public sealed class TigerBeetleResource([ResourceName] string name)
     internal IList<string> AdditionalFormatArguments { get; } = [];
 
     internal IList<string> AdditionalStartArguments { get; } = [];
+
+    static IResourceBuilder<TDestination>? IResourceWithCustomWithReference<TigerBeetleResource>.TryWithReference<TDestination>(
+        IResourceBuilder<TDestination> builder,
+        IResourceBuilder<IResource> source,
+        string? connectionName,
+        bool optional,
+        string? name)
+    {
+        if (source is not IResourceBuilder<TigerBeetleResource> tigerBeetleSource)
+        {
+            return null;
+        }
+
+        if (optional)
+        {
+            throw new InvalidOperationException("Optional references are not supported for TigerBeetle resources.");
+        }
+
+        if (name is not null)
+        {
+            throw new InvalidOperationException("Named service references are not supported for TigerBeetle resources.");
+        }
+
+        return TigerBeetleResourceBuilderExtensions.WithReference(builder, tigerBeetleSource, connectionName);
+    }
+
+    private IReadOnlyList<ReferenceExpression> CreateClientAddressExpressions() => ClientAddresses is { Length: > 0 } addresses
+        ? addresses
+            .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .Select(address => ReferenceExpression.Create($"{address}"))
+            .ToArray()
+        : [ReferenceExpression.Create($"{Host}:{Port}")];
 }

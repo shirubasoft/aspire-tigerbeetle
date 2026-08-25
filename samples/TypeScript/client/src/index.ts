@@ -3,27 +3,15 @@ import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { createClient } from 'tigerbeetle-node';
 
-const connectionString = process.env.ConnectionStrings__tigerbeetle;
+const clusterId = process.env.TIGERBEETLE_CLUSTERID;
+const addresses = process.env.TIGERBEETLE_ADDRESSES;
 
-if (!connectionString) {
-  throw new Error('ConnectionStrings__tigerbeetle is required.');
+if (!clusterId) {
+  throw new Error('TIGERBEETLE_CLUSTERID is required.');
 }
 
-const settings = new Map(
-  connectionString
-    .split(';')
-    .filter(Boolean)
-    .map(part => {
-      const separator = part.indexOf('=');
-      return [part.slice(0, separator), part.slice(separator + 1)] as const;
-    })
-);
-
-const clusterId = settings.get('ClusterID');
-const addresses = settings.get('Addresses');
-
-if (!clusterId || !addresses) {
-  throw new Error('The TigerBeetle connection string needs ClusterID and Addresses.');
+if (!addresses) {
+  throw new Error('TIGERBEETLE_ADDRESSES is required.');
 }
 
 const client = createClient({
@@ -44,8 +32,9 @@ createServer(async (request, response) => {
   }
 
   response.end(JSON.stringify({
-    connectionString,
-    message: 'The TigerBeetle connection string was injected by Aspire.'
+    clusterId,
+    addresses,
+    message: 'TigerBeetle connection properties were injected by Aspire.'
   }));
 }).listen(port, '0.0.0.0');
 

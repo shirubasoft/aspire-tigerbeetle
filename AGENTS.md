@@ -14,13 +14,13 @@ This repository contains an Aspire hosting integration for TigerBeetle, its test
 ## Implementation rules
 
 - Keep the versions in `global.json`, `Directory.Packages.props`, `.config/dotnet-tools.json`, and the TypeScript Aspire configuration compatible.
-- Preserve the public connection-string contract: `ClusterID=<u128>;Addresses=<address>[,<address>...]`.
+- Do not add a synthetic `ConnectionStrings__*` value. TigerBeetle clients consume the structured `Host`, `Port`, `ClusterId`, and `Addresses` properties.
 - TigerBeetle clients require numeric IP addresses. Samples may receive Aspire service DNS names after deployment, so they must resolve those names before constructing the official client.
 - Keep `--development` consistent between `tigerbeetle format` and `tigerbeetle start`.
 - The default resource is one development replica. Do not imply that a generic container deployment satisfies TigerBeetle's production topology, storage, memory-locking, or network requirements.
 - Local container startup needs `seccomp=unconfined`. Deployment targets need the equivalent target-specific security configuration.
 - Public C# AppHost APIs and types must carry `[AspireExport]` so the generated TypeScript SDK exposes them.
-- Add tests for every public builder method and any change to the generated startup command or connection-string expression.
+- Add tests for every public builder method and any change to the generated startup command or structured reference properties.
 - Keep all samples runnable without private services or credentials. A sample health check must include a real TigerBeetle client operation, not only a TCP connection.
 
 ## Release rules
@@ -34,6 +34,6 @@ This repository contains an Aspire hosting integration for TigerBeetle, its test
 
 - `dotnet format Aspire.TigerBeetle.slnx --verify-no-changes`
 - `dotnet test Aspire.TigerBeetle.slnx --configuration Release`
-- Both sample clients read `ConnectionStrings__tigerbeetle` and complete `lookupAccounts` against the managed resource.
+- The C# sample binds indexed `TIGERBEETLE_ADDRESSES__N` values to `string[]`; the TypeScript sample reads scalar `TIGERBEETLE_ADDRESSES`. Both read `TIGERBEETLE_CLUSTERID` and complete `lookupAccounts` against the managed resource.
 - Docker Compose output contains the TigerBeetle image, data volume, format/start command, and `security_opt: seccomp=unconfined`.
 - Package metadata, XML documentation, README examples, and TypeScript exports match the public API.

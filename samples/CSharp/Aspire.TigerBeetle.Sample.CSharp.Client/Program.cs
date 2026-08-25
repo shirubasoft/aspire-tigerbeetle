@@ -4,23 +4,30 @@ using TigerBeetle;
 
 var builder = WebApplication.CreateBuilder(args);
 
-var connectionString = builder.Configuration.GetConnectionString("tigerbeetle")
-    ?? throw new InvalidOperationException("ConnectionStrings:tigerbeetle is required.");
-var settings = ParseConnectionString(connectionString);
+var clusterId = builder.Configuration["TIGERBEETLE_CLUSTERID"]
+    ?? throw new InvalidOperationException("TIGERBEETLE_CLUSTERID is required.");
+var addressConfiguration = builder.Configuration.GetSection("TIGERBEETLE_ADDRESSES");
+var addresses = (addressConfiguration.GetChildren().Any()
+    ? addressConfiguration.Get<string[]>()
+    : addressConfiguration.Value?.Split(
+        ',',
+        StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+    ?? throw new InvalidOperationException("TIGERBEETLE_ADDRESSES is required.");
 var resolvedAddresses = await ResolveAddressesAsync(
-    settings["Addresses"],
+    addresses,
     CancellationToken.None);
 
 builder.Services.AddSingleton(new Client(
-    clusterID: UInt128.Parse(settings["ClusterID"], CultureInfo.InvariantCulture),
+    clusterID: UInt128.Parse(clusterId, CultureInfo.InvariantCulture),
     addresses: resolvedAddresses));
 
 var app = builder.Build();
 
 app.MapGet("/", () => Results.Ok(new
 {
-    connectionString,
-    message = "The TigerBeetle connection string was injected by Aspire."
+    clusterId,
+    addresses = string.Join(',', addresses),
+    message = "TigerBeetle connection properties were injected by Aspire."
 }));
 
 app.MapGet("/accounts/{id}", async (string id, Client client) =>
@@ -32,17 +39,9 @@ app.MapGet("/accounts/{id}", async (string id, Client client) =>
 
 app.Run();
 
-static Dictionary<string, string> ParseConnectionString(string value) => value
-    .Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
-    .Select(part => part.Split('=', 2, StringSplitOptions.TrimEntries))
-    .ToDictionary(
-        part => part[0],
-        part => part.Length == 2 ? part[1] : string.Empty,
-        StringComparer.OrdinalIgnoreCase);
-
-static async Task<string[]> ResolveAddressesAsync(string value, CancellationToken cancellationToken)
+static async Task<string[]> ResolveAddressesAsync(string[] values, CancellationToken cancellationToken)
 {
-    var addresses = value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+    var addresses = values.ToArray();
 
     for (var index = 0; index < addresses.Length; index++)
     {

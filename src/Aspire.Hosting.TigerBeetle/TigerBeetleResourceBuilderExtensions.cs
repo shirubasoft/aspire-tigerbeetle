@@ -30,21 +30,21 @@ public static class TigerBeetleResourceBuilderExtensions
         ArgumentNullException.ThrowIfNull(builder);
 
         var resource = new TigerBeetleResource(name);
-        string? connectionString = null;
+        string? clientAddresses = null;
 
-        builder.Eventing.Subscribe<ConnectionStringAvailableEvent>(resource, async (@event, cancellationToken) =>
+        builder.Eventing.Subscribe<BeforeResourceStartedEvent>(resource, async (@event, cancellationToken) =>
         {
-            connectionString = await resource.ConnectionStringExpression
+            clientAddresses = await resource.ClientAddressesExpression
                 .GetValueAsync(cancellationToken)
                 .ConfigureAwait(false)
                 ?? throw new DistributedApplicationException(
-                    $"The connection string for the '{resource.Name}' resource is unavailable.");
+                    $"The client addresses for the '{resource.Name}' resource are unavailable.");
         });
 
         var healthCheckKey = $"{name}_tcp_check";
         builder.Services.AddHealthChecks().Add(new HealthCheckRegistration(
             healthCheckKey,
-            _ => new TigerBeetleTcpHealthCheck(() => connectionString),
+            _ => new TigerBeetleTcpHealthCheck(() => clientAddresses),
             failureStatus: default,
             tags: default,
             timeout: TimeSpan.FromSeconds(5)));
@@ -71,6 +71,57 @@ public static class TigerBeetleResourceBuilderExtensions
                 context.Args.Add("seccomp=unconfined");
             })
             .WithHealthCheck(healthCheckKey);
+    }
+
+    /// <summary>Adds a structured TigerBeetle reference to a consuming resource.</summary>
+    /// <param name="builder">The consuming resource builder.</param>
+    /// <param name="tigerBeetleResource">The TigerBeetle resource.</param>
+    /// <returns>The consuming resource builder.</returns>
+    [AspireExportIgnore(Reason = "Polyglot app hosts use the custom withReference dispatcher.")]
+    public static IResourceBuilder<TDestination> WithReference<TDestination>(
+        this IResourceBuilder<TDestination> builder,
+        IResourceBuilder<TigerBeetleResource> tigerBeetleResource)
+        where TDestination : IResourceWithEnvironment =>
+        WithReference(builder, tigerBeetleResource, connectionName: null);
+
+    /// <summary>Adds a structured TigerBeetle reference to a consuming resource.</summary>
+    /// <param name="builder">The consuming resource builder.</param>
+    /// <param name="tigerBeetleResource">The TigerBeetle resource.</param>
+    /// <param name="connectionName">An optional name used as the injected property prefix.</param>
+    /// <returns>The consuming resource builder.</returns>
+    [AspireExportIgnore(Reason = "Polyglot app hosts use the custom withReference dispatcher.")]
+    public static IResourceBuilder<TDestination> WithReference<TDestination>(
+        this IResourceBuilder<TDestination> builder,
+        IResourceBuilder<TigerBeetleResource> tigerBeetleResource,
+        string? connectionName)
+        where TDestination : IResourceWithEnvironment
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentNullException.ThrowIfNull(tigerBeetleResource);
+
+        var resource = tigerBeetleResource.Resource;
+        connectionName ??= resource.Name;
+        builder.WithReferenceRelationship(resource);
+
+        builder.Resource.TryGetLastAnnotation<ReferenceEnvironmentInjectionAnnotation>(out var injectionAnnotation);
+        var flags = injectionAnnotation?.Flags ?? ReferenceEnvironmentInjectionFlags.All;
+
+        if (!flags.HasFlag(ReferenceEnvironmentInjectionFlags.ConnectionProperties))
+        {
+            return builder;
+        }
+
+        var prefix = connectionName.Length == 0
+            ? string.Empty
+            : $"{EncodeEnvironmentVariableName(connectionName).ToUpperInvariant()}_";
+
+        return builder.WithEnvironment(context =>
+        {
+            foreach (var property in resource.GetConnectionProperties())
+            {
+                context.EnvironmentVariables[$"{prefix}{property.Key.ToUpperInvariant()}"] = property.Value;
+            }
+        });
     }
 
     /// <summary>Sets the unsigned 128-bit TigerBeetle cluster ID.</summary>
@@ -126,7 +177,7 @@ public static class TigerBeetleResourceBuilderExtensions
     /// <param name="builder">The TigerBeetle resource builder.</param>
     /// <param name="addresses">Comma-separated IPv4 or bracketed IPv6 endpoints.</param>
     /// <returns>The TigerBeetle resource builder.</returns>
-    /// <remarks>TigerBeetle does not accept DNS names. This value is also used in the client connection string.</remarks>
+    /// <remarks>TigerBeetle does not accept DNS names. This value is also exposed through the <c>Addresses</c> connection property.</remarks>
     [AspireExport]
     public static IResourceBuilder<TigerBeetleResource> WithAddresses(
         this IResourceBuilder<TigerBeetleResource> builder,
@@ -352,6 +403,23 @@ public static class TigerBeetleResourceBuilderExtensions
     }
 
     private static string ShellQuote(string value) => $"'{value.Replace("'", "'\"'\"'", StringComparison.Ordinal)}'";
+
+    private static string EncodeEnvironmentVariableName(string name)
+    {
+        var encoded = new StringBuilder(name.Length + 1);
+
+        if (name.Length > 0 && char.IsAsciiDigit(name[0]))
+        {
+            encoded.Append('_');
+        }
+
+        foreach (var character in name)
+        {
+            encoded.Append(char.IsAsciiLetterOrDigit(character) ? character : '_');
+        }
+
+        return encoded.ToString();
+    }
 
     private static void ValidateAddresses(string addresses)
     {

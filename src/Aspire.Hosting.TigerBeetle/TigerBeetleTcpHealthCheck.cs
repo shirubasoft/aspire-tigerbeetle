@@ -4,22 +4,21 @@ using Microsoft.Extensions.Diagnostics.HealthChecks;
 
 namespace Aspire.Hosting.TigerBeetle;
 
-internal sealed class TigerBeetleTcpHealthCheck(Func<string?> connectionStringProvider) : IHealthCheck
+internal sealed class TigerBeetleTcpHealthCheck(Func<string?> clientAddressesProvider) : IHealthCheck
 {
     public async Task<HealthCheckResult> CheckHealthAsync(
         HealthCheckContext context,
         CancellationToken cancellationToken = default)
     {
-        var connectionString = connectionStringProvider();
-        if (string.IsNullOrWhiteSpace(connectionString))
+        var clientAddresses = clientAddressesProvider();
+        if (string.IsNullOrWhiteSpace(clientAddresses))
         {
-            return HealthCheckResult.Unhealthy("The TigerBeetle connection string is not available yet.");
+            return HealthCheckResult.Unhealthy("The TigerBeetle client addresses are not available yet.");
         }
 
         try
         {
-            var addresses = ParseSetting(connectionString, "Addresses");
-            foreach (var address in addresses.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+            foreach (var address in clientAddresses.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
             {
                 var (host, port) = ParseEndpoint(address);
                 using var client = new TcpClient();
@@ -27,7 +26,7 @@ internal sealed class TigerBeetleTcpHealthCheck(Func<string?> connectionStringPr
                 return HealthCheckResult.Healthy("The TigerBeetle TCP endpoint is accepting connections.");
             }
 
-            return HealthCheckResult.Unhealthy("The TigerBeetle connection string has no addresses.");
+            return HealthCheckResult.Unhealthy("The TigerBeetle resource has no client addresses.");
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -37,20 +36,6 @@ internal sealed class TigerBeetleTcpHealthCheck(Func<string?> connectionStringPr
         {
             return HealthCheckResult.Unhealthy("The TigerBeetle TCP endpoint is unavailable.", exception);
         }
-    }
-
-    private static string ParseSetting(string connectionString, string name)
-    {
-        foreach (var part in connectionString.Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
-        {
-            var separator = part.IndexOf('=', StringComparison.Ordinal);
-            if (separator > 0 && part[..separator].Equals(name, StringComparison.OrdinalIgnoreCase))
-            {
-                return part[(separator + 1)..];
-            }
-        }
-
-        throw new FormatException($"The TigerBeetle connection string does not contain {name}.");
     }
 
     private static (string Host, int Port) ParseEndpoint(string address)

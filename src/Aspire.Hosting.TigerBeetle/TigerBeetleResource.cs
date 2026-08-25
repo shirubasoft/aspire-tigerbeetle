@@ -24,6 +24,12 @@ public sealed class TigerBeetleResource([ResourceName] string name)
     public EndpointReference PrimaryEndpoint =>
         _primaryEndpoint ??= new EndpointReference(this, PrimaryEndpointName);
 
+    /// <summary>Gets the host name or IP address used to reach the primary endpoint.</summary>
+    public EndpointReferenceExpression Host => PrimaryEndpoint.Property(EndpointProperty.Host);
+
+    /// <summary>Gets the port used to reach the primary endpoint.</summary>
+    public EndpointReferenceExpression Port => PrimaryEndpoint.Property(EndpointProperty.Port);
+
     /// <summary>Gets the cluster ID passed to TigerBeetle clients and the replica formatter.</summary>
     public string ClusterId { get; internal set; } = "0";
 
@@ -37,7 +43,7 @@ public sealed class TigerBeetleResource([ResourceName] string name)
     public string Addresses { get; internal set; } = $"0.0.0.0:{DefaultPort}";
 
     /// <summary>
-    /// Gets the optional client addresses used in the connection string. When unset, Aspire's allocated endpoint is used.
+    /// Gets the optional client addresses exposed to consuming applications. When unset, Aspire's allocated endpoint is used.
     /// </summary>
     public string? ClientAddresses { get; internal set; }
 
@@ -54,24 +60,25 @@ public sealed class TigerBeetleResource([ResourceName] string name)
     /// <summary>Gets the optional StatsD endpoint.</summary>
     public string? StatsDEndpoint { get; internal set; }
 
+    /// <summary>Gets the cluster ID as a late-bound connection property.</summary>
+    public ReferenceExpression ClusterIdExpression => ReferenceExpression.Create($"{ClusterId}");
+
+    /// <summary>Gets the ordered, comma-separated addresses passed to TigerBeetle clients.</summary>
+    public ReferenceExpression ClientAddressesExpression => ClientAddresses is { Length: > 0 } addresses
+        ? ReferenceExpression.Create($"{addresses}")
+        : ReferenceExpression.Create($"{Host}:{Port}");
+
     /// <inheritdoc />
-    public ReferenceExpression ConnectionStringExpression => ClientAddresses is { Length: > 0 } addresses
-        ? ReferenceExpression.Create($"ClusterID={ClusterId};Addresses={addresses}")
-        : ReferenceExpression.Create(
-            $"ClusterID={ClusterId};Addresses={PrimaryEndpoint.Property(EndpointProperty.IPV4Host)}:{PrimaryEndpoint.Property(EndpointProperty.Port)}");
+    public ReferenceExpression ConnectionStringExpression =>
+        ReferenceExpression.Create($"ClusterID={ClusterIdExpression};Addresses={ClientAddressesExpression}");
 
     /// <inheritdoc />
     public IEnumerable<KeyValuePair<string, ReferenceExpression>> GetConnectionProperties()
     {
-        yield return new KeyValuePair<string, ReferenceExpression>(
-            "ClusterID",
-            ReferenceExpression.Create($"{ClusterId}"));
-        yield return new KeyValuePair<string, ReferenceExpression>(
-            "Addresses",
-            ClientAddresses is { Length: > 0 } addresses
-                ? ReferenceExpression.Create($"{addresses}")
-                : ReferenceExpression.Create(
-                    $"{PrimaryEndpoint.Property(EndpointProperty.IPV4Host)}:{PrimaryEndpoint.Property(EndpointProperty.Port)}"));
+        yield return new("Host", ReferenceExpression.Create($"{Host}"));
+        yield return new("Port", ReferenceExpression.Create($"{Port}"));
+        yield return new("ClusterId", ClusterIdExpression);
+        yield return new("Addresses", ClientAddressesExpression);
     }
 
     internal string? ExplicitDataFile { get; set; }

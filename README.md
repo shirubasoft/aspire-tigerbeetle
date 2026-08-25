@@ -1,6 +1,6 @@
 # Aspire hosting integration for TigerBeetle
 
-`Shirubasoft.Aspire.Hosting.TigerBeetle` adds a TigerBeetle replica to an Aspire AppHost as a custom container resource. It handles first-run formatting, connection-string injection, connection properties, a TCP health check, persistent storage helpers, TypeScript AppHost exports, and Aspire container publication.
+`Shirubasoft.Aspire.Hosting.TigerBeetle` adds a TigerBeetle replica to an Aspire AppHost as a custom container resource. It handles first-run formatting, polyglot connection properties, a TCP health check, persistent storage helpers, TypeScript AppHost exports, and Aspire container publication.
 
 The package uses TigerBeetle `0.17.9` by default and targets Aspire `13.5.2` on .NET 10.
 
@@ -75,7 +75,7 @@ builder.AddProject<Projects.LedgerApi>("ledger-api")
 builder.Build().Run();
 ```
 
-`WithReference` injects the connection string and its individual properties. `WaitFor` waits for the TCP health check before Aspire starts the dependent resource.
+`WithReference` injects language-neutral connection properties. `WaitFor` waits for the TCP health check before Aspire starts the dependent resource.
 
 To use a fixed host port, pass it to `AddTigerBeetle`:
 
@@ -115,54 +115,44 @@ Install the official Node client in the consuming application. Pin it to the ser
 npm install --save-exact tigerbeetle-node@0.17.9
 ```
 
-## Connection string and properties
+## Connection properties
 
-For a resource named `tigerbeetle`, `WithReference` injects these values into the consumer:
+Aspire's polyglot resource contract exposes each value separately. For a resource named `tigerbeetle`, `WithReference` injects these variables into the consumer:
 
 | Variable | Example | Purpose |
 | --- | --- | --- |
-| `ConnectionStrings__tigerbeetle` | `ClusterID=0;Addresses=127.0.0.1:43127` | Complete Aspire connection string |
+| `TIGERBEETLE_HOST` | `127.0.0.1` | Primary endpoint host |
+| `TIGERBEETLE_PORT` | `43127` | Primary endpoint port |
 | `TIGERBEETLE_CLUSTERID` | `0` | TigerBeetle cluster ID |
 | `TIGERBEETLE_ADDRESSES` | `127.0.0.1:43127` | Comma-separated client addresses |
 
-The individual variable prefix comes from the resource name. A resource named `ledger` produces `LEDGER_CLUSTERID` and `LEDGER_ADDRESSES`.
+The prefix comes from the resource name. A resource named `ledger` produces `LEDGER_HOST`, `LEDGER_PORT`, `LEDGER_CLUSTERID`, and `LEDGER_ADDRESSES`.
 
-The connection-string format belongs to this Aspire integration because TigerBeetle clients take the cluster ID and address array as separate constructor values:
+TigerBeetle clients take a cluster ID and address array as separate constructor values. They do not define a native connection-string format, so applications should read `ClusterId` and `Addresses` directly instead of parsing a package-specific string.
 
-```text
-ClusterID=0;Addresses=127.0.0.1:3000
-```
-
-A replicated cluster lists addresses in replica order:
-
-```text
-ClusterID=123456;Addresses=10.0.0.10:3000,10.0.0.11:3000,10.0.0.12:3000
-```
+The resource still implements Aspire's `IResourceWithConnectionString` contract for dashboard display, manifest compatibility, and consumers that explicitly request `ConnectionStrings__tigerbeetle`. That compatibility value is `ClusterID=<u128>;Addresses=<address>[,<address>...]`; it is not the recommended client API.
 
 TigerBeetle `0.17.9` accepts numeric IPv4 addresses, bracketed IPv6 addresses, or a bare port. It does not accept DNS names. Aspire may publish a service address such as `tigerbeetle:3000`, so applications running from a published manifest must resolve the host to a numeric address before constructing an official TigerBeetle client.
 
 ### Connect from .NET
 
-Read the connection string through normal .NET configuration:
+Read the injected properties through normal .NET configuration:
 
 ```csharp
 using System.Globalization;
 using TigerBeetle;
 
-var connectionString = builder.Configuration.GetConnectionString("tigerbeetle")
-    ?? throw new InvalidOperationException("ConnectionStrings:tigerbeetle is required.");
+var clusterId = builder.Configuration["TIGERBEETLE_CLUSTERID"]
+    ?? throw new InvalidOperationException("TIGERBEETLE_CLUSTERID is required.");
+var addresses = builder.Configuration["TIGERBEETLE_ADDRESSES"]
+    ?? throw new InvalidOperationException("TIGERBEETLE_ADDRESSES is required.");
 
-var settings = connectionString
-    .Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
-    .Select(part => part.Split('=', 2, StringSplitOptions.TrimEntries))
-    .ToDictionary(part => part[0], part => part[1], StringComparer.OrdinalIgnoreCase);
-
-var addresses = settings["Addresses"]
+var replicaAddresses = addresses
     .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
 
 builder.Services.AddSingleton(new Client(
-    clusterID: UInt128.Parse(settings["ClusterID"], CultureInfo.InvariantCulture),
-    addresses: addresses));
+    clusterID: UInt128.Parse(clusterId, CultureInfo.InvariantCulture),
+    addresses: replicaAddresses));
 ```
 
 The published-container case needs a DNS-to-IP step before `new Client(...)`. The repository sample includes that step in [`samples/CSharp/Aspire.TigerBeetle.Sample.CSharp.Client/Program.cs`](samples/CSharp/Aspire.TigerBeetle.Sample.CSharp.Client/Program.cs).
@@ -174,21 +164,16 @@ Create one `Client` and share it. The official client is thread-safe and combine
 ```typescript
 import { createClient } from 'tigerbeetle-node';
 
-const connectionString = process.env.ConnectionStrings__tigerbeetle;
-if (!connectionString) {
-  throw new Error('ConnectionStrings__tigerbeetle is required.');
+const clusterId = process.env.TIGERBEETLE_CLUSTERID;
+const addresses = process.env.TIGERBEETLE_ADDRESSES;
+
+if (!clusterId || !addresses) {
+  throw new Error('TIGERBEETLE_CLUSTERID and TIGERBEETLE_ADDRESSES are required.');
 }
 
-const settings = new Map(
-  connectionString.split(';').filter(Boolean).map(part => {
-    const separator = part.indexOf('=');
-    return [part.slice(0, separator), part.slice(separator + 1)] as const;
-  })
-);
-
 const client = createClient({
-  cluster_id: BigInt(settings.get('ClusterID')!),
-  replica_addresses: settings.get('Addresses')!.split(',').map(value => value.trim())
+  cluster_id: BigInt(clusterId),
+  replica_addresses: addresses.split(',').map(value => value.trim())
 });
 ```
 
@@ -201,7 +186,7 @@ The C# names appear in PascalCase. Aspire exports equivalent camelCase methods t
 | Method | Default or example | Behavior |
 | --- | --- | --- |
 | `AddTigerBeetle(name, port: null)` | Dynamic host port, container port `3000` | Adds one `ghcr.io/tigerbeetle/tigerbeetle:0.17.9` container, enables development mode, adds the TCP health check, and adds `seccomp=unconfined` to local container runtime arguments |
-| `WithClusterId(clusterId)` | `"0"` | Sets the unsigned 128-bit decimal cluster ID used by `format` and the connection string. Cluster ID `0` is for tests and development |
+| `WithClusterId(clusterId)` | `"0"` | Sets the unsigned 128-bit decimal cluster ID used by `format` and exposed through the `ClusterId` connection property. Cluster ID `0` is for tests and development |
 | `WithReplica(replicaIndex, replicaCount)` | `0, 1` | Sets this replica's zero-based index and cluster size. The integration accepts 1 through 6 replicas |
 | `WithAddresses(addresses)` | `"0.0.0.0:3000"` for server startup | Sets the ordered numeric addresses passed to `tigerbeetle start` and also uses them as client addresses |
 | `WithClientAddresses(addresses)` | Aspire allocated endpoint | Overrides only the client address list. Use it when listen and client addresses differ |
@@ -255,13 +240,13 @@ var tigerBeetle = builder.AddTigerBeetle("tigerbeetle")
 
 TigerBeetle needs a writable data file. A read-only mount cannot run a replica.
 
-Cluster ID, replica index, and replica count are recorded when the file is formatted. Do not change those values while reusing a custom fixed data-file path. The connection string could then describe a different cluster than the file contains.
+Cluster ID, replica index, and replica count are recorded when the file is formatted. Do not change those values while reusing a custom fixed data-file path. The exported connection properties could then describe a different cluster than the file contains.
 
 The automatic format-if-missing behavior is intended for first startup and single-replica development. It is not a production recovery procedure. If a production replica loses its data file, use `tigerbeetle recover`. Formatting a replacement replica can violate durability guarantees.
 
 ## Health checks
 
-The integration registers a five-second TCP health check. It connects to the first client address in the generated connection string and reports healthy when the socket accepts a connection.
+The integration registers a five-second TCP health check. It connects to the first exported client address and reports healthy when the socket accepts a connection.
 
 This proves that the process is listening. It does not prove that a replicated cluster can commit a request. TigerBeetle has no HTTP health endpoint. For production monitoring, enable StatsD and monitor at least:
 
@@ -292,7 +277,7 @@ aspire wait tigerbeetle \
   --non-interactive
 ```
 
-The client URL appears in the Aspire dashboard. `GET /` returns the injected connection string. `GET /accounts/1` performs a TigerBeetle account lookup.
+The client URL appears in the Aspire dashboard. `GET /` returns the injected cluster ID and addresses. `GET /accounts/1` performs a TigerBeetle account lookup.
 
 Prepare and start the TypeScript sample:
 

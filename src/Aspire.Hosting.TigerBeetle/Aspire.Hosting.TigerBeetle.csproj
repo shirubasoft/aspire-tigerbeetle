@@ -4,7 +4,7 @@
     <RootNamespace>Aspire.Hosting.TigerBeetle</RootNamespace>
     <PackageId>Shirubasoft.Aspire.Hosting.TigerBeetle</PackageId>
     <Title>Aspire hosting integration for TigerBeetle</Title>
-    <Description>Runs TigerBeetle as an Aspire container resource with connection strings, persistence, health checks, TypeScript AppHost exports, and deployment manifest support.</Description>
+    <Description>Runs TigerBeetle as an Aspire container resource with polyglot connection properties, persistence, health checks, TypeScript AppHost exports, and deployment manifest support.</Description>
     <Authors>Shirubasoft</Authors>
     <PackageTags>aspire;tigerbeetle;database;distributed-systems;container</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>

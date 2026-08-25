@@ -61,7 +61,7 @@ public sealed class TigerBeetleResourceTests
     }
 
     [Fact]
-    public async Task WithReferenceInjectsTheConnectionStringAndProperties()
+    public async Task WithReferenceInjectsStandardAndTigerBeetleConnectionProperties()
     {
         var builder = DistributedApplication.CreateBuilder();
         var tigerBeetle = builder.AddTigerBeetle("tigerbeetle")
@@ -73,8 +73,14 @@ public sealed class TigerBeetleResourceTests
         var environment = await consumer.Resource.GetEnvironmentVariableValuesAsync();
 
         Assert.Equal("ClusterID=0;Addresses=127.0.0.1:4567", environment["ConnectionStrings__tigerbeetle"]);
+        Assert.Equal("127.0.0.1", environment["TIGERBEETLE_HOST"]);
+        Assert.Equal("4567", environment["TIGERBEETLE_PORT"]);
         Assert.Equal("0", environment["TIGERBEETLE_CLUSTERID"]);
         Assert.Equal("127.0.0.1:4567", environment["TIGERBEETLE_ADDRESSES"]);
+
+        Assert.Equal(
+            ["Host", "Port", "ClusterId", "Addresses"],
+            tigerBeetle.Resource.GetConnectionProperties().Select(property => property.Key));
     }
 
     [Fact]

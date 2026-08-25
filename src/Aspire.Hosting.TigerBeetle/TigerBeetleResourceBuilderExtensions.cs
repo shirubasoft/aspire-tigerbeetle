@@ -30,21 +30,21 @@ public static class TigerBeetleResourceBuilderExtensions
         ArgumentNullException.ThrowIfNull(builder);
 
         var resource = new TigerBeetleResource(name);
-        string? connectionString = null;
+        string? clientAddresses = null;
 
         builder.Eventing.Subscribe<ConnectionStringAvailableEvent>(resource, async (@event, cancellationToken) =>
         {
-            connectionString = await resource.ConnectionStringExpression
+            clientAddresses = await resource.ClientAddressesExpression
                 .GetValueAsync(cancellationToken)
                 .ConfigureAwait(false)
                 ?? throw new DistributedApplicationException(
-                    $"The connection string for the '{resource.Name}' resource is unavailable.");
+                    $"The client addresses for the '{resource.Name}' resource are unavailable.");
         });
 
         var healthCheckKey = $"{name}_tcp_check";
         builder.Services.AddHealthChecks().Add(new HealthCheckRegistration(
             healthCheckKey,
-            _ => new TigerBeetleTcpHealthCheck(() => connectionString),
+            _ => new TigerBeetleTcpHealthCheck(() => clientAddresses),
             failureStatus: default,
             tags: default,
             timeout: TimeSpan.FromSeconds(5)));
@@ -126,7 +126,7 @@ public static class TigerBeetleResourceBuilderExtensions
     /// <param name="builder">The TigerBeetle resource builder.</param>
     /// <param name="addresses">Comma-separated IPv4 or bracketed IPv6 endpoints.</param>
     /// <returns>The TigerBeetle resource builder.</returns>
-    /// <remarks>TigerBeetle does not accept DNS names. This value is also used in the client connection string.</remarks>
+    /// <remarks>TigerBeetle does not accept DNS names. This value is also exposed through the <c>Addresses</c> connection property.</remarks>
     [AspireExport]
     public static IResourceBuilder<TigerBeetleResource> WithAddresses(
         this IResourceBuilder<TigerBeetleResource> builder,

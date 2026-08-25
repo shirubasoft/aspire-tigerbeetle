@@ -21,6 +21,7 @@ public static class TigerBeetleResourceBuilderExtensions
     /// <remarks>
     /// The resource formats its data file when it does not exist, then starts TigerBeetle. Development mode is on by default.
     /// </remarks>
+    /// <exception cref="ArgumentNullException"><paramref name="builder" /> is <see langword="null" />.</exception>
     [AspireExport]
     public static IResourceBuilder<TigerBeetleResource> AddTigerBeetle(
         this IDistributedApplicationBuilder builder,
@@ -30,21 +31,33 @@ public static class TigerBeetleResourceBuilderExtensions
         ArgumentNullException.ThrowIfNull(builder);
 
         var resource = new TigerBeetleResource(name);
-        string? clientAddresses = null;
+        (string Host, int Port)? primaryEndpoint = null;
 
         builder.Eventing.Subscribe<BeforeResourceStartedEvent>(resource, async (@event, cancellationToken) =>
         {
-            clientAddresses = await resource.ClientAddressesExpression
+            var host = await resource.Host
                 .GetValueAsync(cancellationToken)
                 .ConfigureAwait(false)
                 ?? throw new DistributedApplicationException(
-                    $"The client addresses for the '{resource.Name}' resource are unavailable.");
+                    $"The primary endpoint host for the '{resource.Name}' resource is unavailable.");
+            var portValue = await resource.Port
+                .GetValueAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            if (!int.TryParse(portValue, NumberStyles.None, CultureInfo.InvariantCulture, out var primaryPort) ||
+                primaryPort is < 1 or > 65535)
+            {
+                throw new DistributedApplicationException(
+                    $"The primary endpoint port for the '{resource.Name}' resource is unavailable or invalid.");
+            }
+
+            primaryEndpoint = (host, primaryPort);
         });
 
         var healthCheckKey = $"{name}_tcp_check";
         builder.Services.AddHealthChecks().Add(new HealthCheckRegistration(
             healthCheckKey,
-            _ => new TigerBeetleTcpHealthCheck(() => clientAddresses),
+            _ => new TigerBeetleTcpHealthCheck(() => primaryEndpoint),
             failureStatus: default,
             tags: default,
             timeout: TimeSpan.FromSeconds(5)));
@@ -129,6 +142,8 @@ public static class TigerBeetleResourceBuilderExtensions
     /// <param name="clusterId">The cluster ID in decimal form.</param>
     /// <returns>The TigerBeetle resource builder.</returns>
     /// <remarks>Cluster ID 0 is reserved for tests. Changing this setting with an existing data volume creates a different data file.</remarks>
+    /// <exception cref="ArgumentNullException"><paramref name="builder" /> is <see langword="null" />.</exception>
+    /// <exception cref="ArgumentException"><paramref name="clusterId" /> is not an unsigned 128-bit decimal value.</exception>
     [AspireExport]
     public static IResourceBuilder<TigerBeetleResource> WithClusterId(
         this IResourceBuilder<TigerBeetleResource> builder,
@@ -145,11 +160,28 @@ public static class TigerBeetleResourceBuilderExtensions
         return builder;
     }
 
+    /// <summary>Sets the unsigned 128-bit TigerBeetle cluster ID.</summary>
+    /// <param name="builder">The TigerBeetle resource builder.</param>
+    /// <param name="clusterId">The cluster ID.</param>
+    /// <returns>The TigerBeetle resource builder.</returns>
+    /// <remarks>Cluster ID 0 is reserved for tests. Changing this setting with an existing data volume creates a different data file.</remarks>
+    /// <exception cref="ArgumentNullException"><paramref name="builder" /> is <see langword="null" />.</exception>
+    [AspireExportIgnore(Reason = "System.UInt128 has no portable TypeScript representation. Use the decimal string overload in polyglot AppHosts.")]
+    public static IResourceBuilder<TigerBeetleResource> WithClusterId(
+        this IResourceBuilder<TigerBeetleResource> builder,
+        UInt128 clusterId)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        return builder.WithClusterId(clusterId.ToString(CultureInfo.InvariantCulture));
+    }
+
     /// <summary>Sets this replica's index and the cluster replica count.</summary>
     /// <param name="builder">The TigerBeetle resource builder.</param>
     /// <param name="replicaIndex">The zero-based replica index.</param>
     /// <param name="replicaCount">The cluster replica count, from 1 through 6.</param>
     /// <returns>The TigerBeetle resource builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="builder" /> is <see langword="null" />.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="replicaCount" /> is outside the range from 1 through 6, or <paramref name="replicaIndex" /> is outside the configured replica range.</exception>
     [AspireExport]
     public static IResourceBuilder<TigerBeetleResource> WithReplica(
         this IResourceBuilder<TigerBeetleResource> builder,
@@ -175,9 +207,11 @@ public static class TigerBeetleResourceBuilderExtensions
 
     /// <summary>Sets the ordered numeric addresses passed to <c>tigerbeetle start</c>.</summary>
     /// <param name="builder">The TigerBeetle resource builder.</param>
-    /// <param name="addresses">Comma-separated IPv4 or bracketed IPv6 endpoints.</param>
+    /// <param name="addresses">Comma-separated ports, numeric IP addresses, or numeric IP endpoints.</param>
     /// <returns>The TigerBeetle resource builder.</returns>
-    /// <remarks>TigerBeetle does not accept DNS names. This value is also exposed through the <c>Addresses</c> connection property.</remarks>
+    /// <remarks>TigerBeetle does not accept DNS names. Configure one ordered address per replica. This value is also exposed through the <c>Addresses</c> connection property.</remarks>
+    /// <exception cref="ArgumentNullException"><paramref name="builder" /> is <see langword="null" />.</exception>
+    /// <exception cref="ArgumentException"><paramref name="addresses" /> is empty or contains an invalid address.</exception>
     [AspireExport]
     public static IResourceBuilder<TigerBeetleResource> WithAddresses(
         this IResourceBuilder<TigerBeetleResource> builder,
@@ -193,8 +227,10 @@ public static class TigerBeetleResourceBuilderExtensions
 
     /// <summary>Sets client addresses without changing the replica listen addresses.</summary>
     /// <param name="builder">The TigerBeetle resource builder.</param>
-    /// <param name="addresses">Comma-separated IPv4 or bracketed IPv6 endpoints.</param>
+    /// <param name="addresses">Comma-separated ports, numeric IP addresses, or numeric IP endpoints.</param>
     /// <returns>The TigerBeetle resource builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="builder" /> is <see langword="null" />.</exception>
+    /// <exception cref="ArgumentException"><paramref name="addresses" /> is empty or contains an invalid address.</exception>
     [AspireExport]
     public static IResourceBuilder<TigerBeetleResource> WithClientAddresses(
         this IResourceBuilder<TigerBeetleResource> builder,
@@ -211,6 +247,8 @@ public static class TigerBeetleResourceBuilderExtensions
     /// <param name="builder">The TigerBeetle resource builder.</param>
     /// <param name="size">A TigerBeetle byte-size value.</param>
     /// <returns>The TigerBeetle resource builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="builder" /> is <see langword="null" />.</exception>
+    /// <exception cref="ArgumentException"><paramref name="size" /> is empty or contains only white-space characters.</exception>
     [AspireExport]
     public static IResourceBuilder<TigerBeetleResource> WithCacheGrid(
         this IResourceBuilder<TigerBeetleResource> builder,
@@ -228,6 +266,7 @@ public static class TigerBeetleResourceBuilderExtensions
     /// <param name="enabled">Whether development mode is enabled.</param>
     /// <returns>The TigerBeetle resource builder.</returns>
     /// <remarks>Production mode requires TigerBeetle's host, memory-locking, disk, and networking requirements.</remarks>
+    /// <exception cref="ArgumentNullException"><paramref name="builder" /> is <see langword="null" />.</exception>
     [AspireExport]
     public static IResourceBuilder<TigerBeetleResource> WithDevelopmentMode(
         this IResourceBuilder<TigerBeetleResource> builder,
@@ -242,6 +281,8 @@ public static class TigerBeetleResourceBuilderExtensions
     /// <param name="builder">The TigerBeetle resource builder.</param>
     /// <param name="path">An absolute container path.</param>
     /// <returns>The TigerBeetle resource builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="builder" /> is <see langword="null" />.</exception>
+    /// <exception cref="ArgumentException"><paramref name="path" /> is empty, contains only white-space characters, or is not an absolute container path.</exception>
     [AspireExport]
     public static IResourceBuilder<TigerBeetleResource> WithDataFile(
         this IResourceBuilder<TigerBeetleResource> builder,
@@ -264,6 +305,8 @@ public static class TigerBeetleResourceBuilderExtensions
     /// <param name="name">The optional volume name. Aspire generates a stable name when omitted.</param>
     /// <param name="isReadOnly">Whether the volume is read-only.</param>
     /// <returns>The TigerBeetle resource builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="builder" /> is <see langword="null" />.</exception>
+    /// <exception cref="ArgumentException"><paramref name="name" /> is explicitly empty or contains only white-space characters, or <paramref name="isReadOnly" /> is <see langword="true" />.</exception>
     [AspireExport]
     public static IResourceBuilder<TigerBeetleResource> WithDataVolume(
         this IResourceBuilder<TigerBeetleResource> builder,
@@ -271,10 +314,21 @@ public static class TigerBeetleResourceBuilderExtensions
         bool isReadOnly = false)
     {
         ArgumentNullException.ThrowIfNull(builder);
+
+        if (name is not null)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        }
+
+        if (isReadOnly)
+        {
+            throw new ArgumentException("TigerBeetle data volumes must be writable.", nameof(isReadOnly));
+        }
+
         return builder.WithVolume(
             name ?? VolumeNameGenerator.Generate(builder, "data"),
             TigerBeetleResource.DataDirectory,
-            isReadOnly);
+            isReadOnly: false);
     }
 
     /// <summary>Adds a bind mount at TigerBeetle's <c>/data</c> directory.</summary>
@@ -282,6 +336,8 @@ public static class TigerBeetleResourceBuilderExtensions
     /// <param name="source">The host directory.</param>
     /// <param name="isReadOnly">Whether the bind mount is read-only.</param>
     /// <returns>The TigerBeetle resource builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="builder" /> is <see langword="null" />.</exception>
+    /// <exception cref="ArgumentException"><paramref name="source" /> is empty or contains only white-space characters, or <paramref name="isReadOnly" /> is <see langword="true" />.</exception>
     [AspireExport]
     public static IResourceBuilder<TigerBeetleResource> WithDataBindMount(
         this IResourceBuilder<TigerBeetleResource> builder,
@@ -290,7 +346,13 @@ public static class TigerBeetleResourceBuilderExtensions
     {
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentException.ThrowIfNullOrWhiteSpace(source);
-        return builder.WithBindMount(source, TigerBeetleResource.DataDirectory, isReadOnly);
+
+        if (isReadOnly)
+        {
+            throw new ArgumentException("TigerBeetle data bind mounts must be writable.", nameof(isReadOnly));
+        }
+
+        return builder.WithBindMount(source, TigerBeetleResource.DataDirectory, isReadOnly: false);
     }
 
     /// <summary>Enables TigerBeetle's experimental StatsD exporter.</summary>
@@ -298,6 +360,9 @@ public static class TigerBeetleResourceBuilderExtensions
     /// <param name="ipAddress">A numeric StatsD IPv4 or IPv6 address.</param>
     /// <param name="port">The StatsD UDP port.</param>
     /// <returns>The TigerBeetle resource builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="builder" /> is <see langword="null" />.</exception>
+    /// <exception cref="ArgumentException"><paramref name="ipAddress" /> is not a numeric IPv4 or IPv6 address.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="port" /> is outside the range from 1 through 65535.</exception>
     [AspireExport]
     public static IResourceBuilder<TigerBeetleResource> WithStatsD(
         this IResourceBuilder<TigerBeetleResource> builder,
@@ -326,6 +391,8 @@ public static class TigerBeetleResourceBuilderExtensions
     /// <param name="builder">The TigerBeetle resource builder.</param>
     /// <param name="argument">The argument.</param>
     /// <returns>The TigerBeetle resource builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="builder" /> is <see langword="null" />.</exception>
+    /// <exception cref="ArgumentException"><paramref name="argument" /> is empty or contains only white-space characters.</exception>
     [AspireExport]
     public static IResourceBuilder<TigerBeetleResource> WithFormatArgument(
         this IResourceBuilder<TigerBeetleResource> builder,
@@ -341,6 +408,8 @@ public static class TigerBeetleResourceBuilderExtensions
     /// <param name="builder">The TigerBeetle resource builder.</param>
     /// <param name="argument">The argument.</param>
     /// <returns>The TigerBeetle resource builder.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="builder" /> is <see langword="null" />.</exception>
+    /// <exception cref="ArgumentException"><paramref name="argument" /> is empty or contains only white-space characters.</exception>
     [AspireExport]
     public static IResourceBuilder<TigerBeetleResource> WithStartArgument(
         this IResourceBuilder<TigerBeetleResource> builder,
@@ -354,6 +423,8 @@ public static class TigerBeetleResourceBuilderExtensions
 
     private static string BuildStartupScript(TigerBeetleResource resource)
     {
+        ValidateReplicaAddressCount(resource);
+
         var dataFile = ShellQuote(resource.DataFile);
         var script = new StringBuilder()
             .AppendLine("set -eu")
@@ -425,19 +496,67 @@ public static class TigerBeetleResourceBuilderExtensions
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(addresses);
 
-        foreach (var address in addresses.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+        foreach (var address in addresses.Split(',', StringSplitOptions.TrimEntries))
         {
-            if (int.TryParse(address, NumberStyles.None, CultureInfo.InvariantCulture, out var port) && port is >= 1 and <= 65535)
-            {
-                continue;
-            }
-
-            if (!IPEndPoint.TryParse(address, out var endpoint) || endpoint.Port is < 1 or > 65535)
+            if (address.Length == 0)
             {
                 throw new ArgumentException(
-                    "TigerBeetle addresses must be numeric IPv4 or bracketed IPv6 endpoints separated by commas.",
+                    "TigerBeetle addresses cannot contain empty entries.",
                     nameof(addresses));
             }
+
+            if (!IsValidTigerBeetleAddress(address))
+            {
+                throw new ArgumentException(
+                    $"'{address}' is not a valid TigerBeetle address. Use a port, a numeric IPv4 or IPv6 address, or a numeric IP address with a port.",
+                    nameof(addresses));
+            }
+        }
+    }
+
+    private static bool IsValidTigerBeetleAddress(string address)
+    {
+        if (int.TryParse(address, NumberStyles.None, CultureInfo.InvariantCulture, out var port))
+        {
+            return port is >= 1 and <= 65535;
+        }
+
+        if (IPAddress.TryParse(address, out _))
+        {
+            return true;
+        }
+
+        if (address[0] == '[')
+        {
+            var closingBracket = address.IndexOf(']', StringComparison.Ordinal);
+            return closingBracket > 1 &&
+                closingBracket == address.LastIndexOf(']') &&
+                closingBracket + 2 < address.Length &&
+                address[closingBracket + 1] == ':' &&
+                IPAddress.TryParse(address[1..closingBracket], out var ipv6Address) &&
+                ipv6Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6 &&
+                int.TryParse(address[(closingBracket + 2)..], NumberStyles.None, CultureInfo.InvariantCulture, out port) &&
+                port is >= 1 and <= 65535;
+        }
+
+        var separator = address.LastIndexOf(':');
+        return separator > 0 &&
+            separator == address.IndexOf(':') &&
+            IPAddress.TryParse(address[..separator], out var ipv4Address) &&
+            ipv4Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork &&
+            int.TryParse(address[(separator + 1)..], NumberStyles.None, CultureInfo.InvariantCulture, out port) &&
+            port is >= 1 and <= 65535;
+    }
+
+    private static void ValidateReplicaAddressCount(TigerBeetleResource resource)
+    {
+        var addressCount = resource.Addresses.Split(',', StringSplitOptions.TrimEntries).Length;
+        if (addressCount != resource.ReplicaCount)
+        {
+            throw new DistributedApplicationException(
+                $"The TigerBeetle resource '{resource.Name}' has {addressCount.ToString(CultureInfo.InvariantCulture)} server " +
+                $"address(es), but its replica count is {resource.ReplicaCount.ToString(CultureInfo.InvariantCulture)}. " +
+                $"Configure exactly one ordered address per replica with {nameof(WithAddresses)}.");
         }
     }
 }

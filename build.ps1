@@ -6,16 +6,26 @@ param(
 $ErrorActionPreference = "Stop"
 
 function Invoke-DotNet {
-    & dotnet @args
+    param(
+        [Parameter(ValueFromRemainingArguments)]
+        [string[]] $Arguments
+    )
+
+    & dotnet @Arguments
     if ($LASTEXITCODE -ne 0) {
-        throw "dotnet $($args -join ' ') failed with exit code $LASTEXITCODE."
+        throw "dotnet $($Arguments -join ' ') failed with exit code $LASTEXITCODE."
     }
 }
 
 function Invoke-Npm {
-    & npm @args
+    param(
+        [Parameter(ValueFromRemainingArguments)]
+        [string[]] $Arguments
+    )
+
+    & npm.cmd @Arguments
     if ($LASTEXITCODE -ne 0) {
-        throw "npm $($args -join ' ') failed with exit code $LASTEXITCODE."
+        throw "npm $($Arguments -join ' ') failed with exit code $LASTEXITCODE."
     }
 }
 

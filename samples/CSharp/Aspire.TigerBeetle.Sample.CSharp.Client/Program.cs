@@ -27,6 +27,17 @@ using var tigerBeetleClient = new Client(
     addresses: resolvedAddresses);
 await EnsureSampleAccountsAsync(tigerBeetleClient);
 
+var eventStore = new CdcEventStore(capacity: 100);
+builder.Services.AddSingleton(tigerBeetleClient);
+builder.Services.AddSingleton(eventStore);
+
+var app = builder.Build();
+
+app.Logger.LogInformation(
+    "Connected to TigerBeetle cluster {ClusterId} at {Addresses}. Sample accounts are ready.",
+    clusterId,
+    string.Join(',', resolvedAddresses));
+
 var rabbitMqConnectionString = builder.Configuration.GetConnectionString("rabbitmq")
     ?? throw new InvalidOperationException("The rabbitmq connection string is required.");
 var rabbitMqFactory = new ConnectionFactory
@@ -59,20 +70,26 @@ await rabbitMqChannel.QueueBindAsync(
     arguments: null,
     noWait: false);
 
-var eventStore = new CdcEventStore(capacity: 100);
 var consumer = new AsyncEventingBasicConsumer(rabbitMqChannel);
 consumer.ReceivedAsync += async (_, delivery) =>
 {
     using var document = JsonDocument.Parse(delivery.Body);
-    eventStore.Add(document.RootElement.Clone());
+    var storedEventCount = eventStore.Add(document.RootElement.Clone());
     await rabbitMqChannel.BasicAckAsync(delivery.DeliveryTag, multiple: false);
+
+    app.Logger.LogInformation(
+        "Received TigerBeetle CDC delivery {DeliveryTag} from exchange {Exchange} with {BodyLength} bytes. Stored event count is {StoredEventCount}.",
+        delivery.DeliveryTag,
+        delivery.Exchange,
+        delivery.Body.Length,
+        storedEventCount);
 };
 await rabbitMqChannel.BasicConsumeAsync(CdcQueue, autoAck: false, consumer);
 
-builder.Services.AddSingleton(tigerBeetleClient);
-builder.Services.AddSingleton(eventStore);
-
-var app = builder.Build();
+app.Logger.LogInformation(
+    "RabbitMQ CDC consumer is ready. Queue {Queue} is bound to exchange {Exchange}.",
+    CdcQueue,
+    CdcExchange);
 
 app.MapGet("/", () => Results.Ok(new
 {
@@ -113,11 +130,23 @@ app.MapPost("/transfers", async (Client client) =>
 
     if (results[0].Status != CreateTransferStatus.Created)
     {
+        app.Logger.LogWarning(
+            "TigerBeetle rejected transfer {TransferId} with status {Status}.",
+            transfer.Id,
+            results[0].Status);
+
         return Results.Conflict(new
         {
             result = results[0].Status.ToString(),
         });
     }
+
+    app.Logger.LogInformation(
+        "Created TigerBeetle transfer {TransferId} from account {DebitAccountId} to {CreditAccountId} for {Amount}.",
+        transfer.Id,
+        transfer.DebitAccountId,
+        transfer.CreditAccountId,
+        transfer.Amount);
 
     return Results.Created($"/transfers/{transfer.Id}", new
     {
@@ -185,7 +214,7 @@ sealed class CdcEventStore(int capacity)
 {
     private readonly ConcurrentQueue<JsonElement> _events = new();
 
-    public void Add(JsonElement value)
+    public int Add(JsonElement value)
     {
         _events.Enqueue(value);
 
@@ -193,6 +222,8 @@ sealed class CdcEventStore(int capacity)
         {
             _events.TryDequeue(out _);
         }
+
+        return _events.Count;
     }
 
     public JsonElement[] Snapshot() => _events.ToArray();

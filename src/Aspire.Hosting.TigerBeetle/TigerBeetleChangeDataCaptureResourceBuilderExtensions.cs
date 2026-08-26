@@ -82,10 +82,20 @@ public static class TigerBeetleChangeDataCaptureResourceBuilderExtensions
                     ?? throw new DistributedApplicationException(
                         $"The AMQP connection string for the '{amqpConnection.Resource.Name}' resource is unavailable.");
                 var connection = ParseAmqpConnectionString(connectionString);
+                var logger = @event.Services.GetRequiredService<ResourceLoggerService>().GetLogger(resource);
+
+                logger.LogInformation(
+                    "Starting TigerBeetle CDC resource {ResourceName} for cluster {ClusterId}. Publishing to exchange {PublishExchange} at {Scheme}://{Host}:{Port}.",
+                    resource.Name,
+                    resource.TigerBeetle.ClusterId,
+                    resource.PublishExchange,
+                    connection.Scheme,
+                    connection.Host,
+                    connection.Port);
 
                 if (connection.UsesTls)
                 {
-                    @event.Services.GetRequiredService<ResourceLoggerService>().GetLogger(resource).LogWarning(
+                    logger.LogWarning(
                         "TigerBeetle CDC does not support native AMQP TLS. Resource {ResourceName} will connect to {Host}:{Port} without TLS. Configure a TLS tunnel for amqps:// connections.",
                         resource.Name,
                         connection.Host,
@@ -380,6 +390,11 @@ public static class TigerBeetleChangeDataCaptureResourceBuilderExtensions
         {
             script.Append("amqp_vhost=").AppendLine(ShellQuote(resource.VirtualHost));
         }
+
+        script.Append("printf 'TigerBeetle CDC starting: cluster=%s addresses=%s amqp_host=%s vhost=%s publish_exchange=%s\\n' ")
+            .Append(ShellQuote(resource.TigerBeetle.ClusterId))
+            .Append(" \"$tigerbeetle_addresses\" \"$amqp_host\" \"$amqp_vhost\" ")
+            .AppendLine(ShellQuote(resource.PublishExchange));
 
         script.Append("exec /sbin/tini -- /tigerbeetle amqp")
             .Append(" --addresses=\"$tigerbeetle_addresses\"")

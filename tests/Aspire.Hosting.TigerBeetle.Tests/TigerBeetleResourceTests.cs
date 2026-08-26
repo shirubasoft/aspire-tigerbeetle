@@ -47,6 +47,12 @@ public sealed class TigerBeetleResourceTests
         Assert.Contains("--vhost=\"$amqp_vhost\"", arguments[1]);
         Assert.Contains("--publish-exchange='tigerbeetle'", arguments[1]);
         Assert.Contains("getent ahostsv4", arguments[1]);
+        Assert.Contains(
+            "TigerBeetle CDC starting: cluster=%s addresses=%s amqp_host=%s vhost=%s publish_exchange=%s",
+            arguments[1]);
+        Assert.True(
+            arguments[1].IndexOf("TigerBeetle CDC starting", StringComparison.Ordinal) <
+            arguments[1].IndexOf("exec /sbin/tini -- /tigerbeetle amqp", StringComparison.Ordinal));
 
         var runtimeArgs = Assert.Single(cdc.Resource.Annotations.OfType<ContainerRuntimeArgsCallbackAnnotation>());
         var values = new List<object>();

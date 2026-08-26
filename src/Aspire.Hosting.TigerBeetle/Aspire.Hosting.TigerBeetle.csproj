@@ -4,9 +4,9 @@
     <RootNamespace>Aspire.Hosting.TigerBeetle</RootNamespace>
     <PackageId>Shirubasoft.Aspire.Hosting.TigerBeetle</PackageId>
     <Title>Aspire hosting integration for TigerBeetle</Title>
-    <Description>Runs TigerBeetle as an Aspire container resource with polyglot connection properties, persistence, health checks, TypeScript AppHost exports, and deployment manifest support.</Description>
+    <Description>Runs TigerBeetle and its RabbitMQ change data capture job as Aspire container resources with polyglot APIs, persistence, health checks, and deployment manifest support.</Description>
     <Authors>Shirubasoft</Authors>
-    <PackageTags>aspire;tigerbeetle;database;distributed-systems;container</PackageTags>
+    <PackageTags>aspire;tigerbeetle;database;distributed-systems;container;cdc;rabbitmq</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <RepositoryType>git</RepositoryType>
     <RepositoryUrl>https://github.com/shirubasoft/aspire-tigerbeetle</RepositoryUrl>
@@ -19,6 +19,7 @@
 
   <ItemGroup>
     <PackageReference Include="Aspire.Hosting" />
+    <PackageReference Include="Aspire.Hosting.RabbitMQ" />
     <PackageReference Include="Microsoft.SourceLink.GitHub" PrivateAssets="all" />
   </ItemGroup>
 

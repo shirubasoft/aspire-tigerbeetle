@@ -117,6 +117,90 @@ run_sample() {
   return "$stop_status"
 }
 
+run_cdc_sample() {
+  local apphost="$1"
+  local description=""
+  local client_url=""
+  local transfer_response=""
+  local transfer_id=""
+  local events="[]"
+  local event_received=false
+  local smoke_status=0
+  local wait_status=0
+  local stop_status=0
+
+  dotnet tool run aspire -- start \
+    --apphost "$apphost" \
+    --isolated \
+    --non-interactive
+
+  dotnet tool run aspire -- wait tigerbeetle-cdc \
+    --apphost "$apphost" \
+    --timeout 180 \
+    --non-interactive || wait_status=$?
+
+  if [[ $wait_status -eq 0 ]]; then
+    description="$(dotnet tool run aspire -- describe client \
+      --apphost "$apphost" \
+      --format Json \
+      --non-interactive)" || smoke_status=$?
+  fi
+
+  if [[ $wait_status -eq 0 && $smoke_status -eq 0 ]]; then
+    client_url="$(jq -er \
+      '.resources[0].urls[] | select(.name == "http") | .url' \
+      <<<"$description")" || smoke_status=$?
+  fi
+
+  if [[ $wait_status -eq 0 && $smoke_status -eq 0 ]]; then
+    transfer_response="$(curl --fail --silent --show-error \
+      --request POST \
+      "${client_url%/}/transfers")" || smoke_status=$?
+  fi
+
+  if [[ $wait_status -eq 0 && $smoke_status -eq 0 ]]; then
+    transfer_id="$(jq -er '.id' <<<"$transfer_response")" || smoke_status=$?
+  fi
+
+  if [[ $wait_status -eq 0 && $smoke_status -eq 0 ]]; then
+    for _ in {1..30}; do
+      events="$(curl --fail --silent --show-error \
+        "${client_url%/}/cdc/events")" || {
+          smoke_status=$?
+          break
+        }
+
+      if jq -e --arg transfer_id "$transfer_id" \
+        'any(.[]; (.transfer.id | tostring) == $transfer_id)' \
+        <<<"$events" >/dev/null; then
+        event_received=true
+        break
+      fi
+
+      sleep 1
+    done
+  fi
+
+  if [[ $wait_status -eq 0 && $smoke_status -eq 0 && "$event_received" != true ]]; then
+    echo "CDC did not publish transfer $transfer_id. Last events response: $events" >&2
+    smoke_status=1
+  fi
+
+  dotnet tool run aspire -- stop \
+    --apphost "$apphost" \
+    --non-interactive || stop_status=$?
+
+  if [[ $wait_status -ne 0 ]]; then
+    return "$wait_status"
+  fi
+
+  if [[ $smoke_status -ne 0 ]]; then
+    return "$smoke_status"
+  fi
+
+  return "$stop_status"
+}
+
 verify_compose_publish() {
   local publish_output
   local compose_file
@@ -133,6 +217,8 @@ verify_compose_publish() {
   grep -F 'ghcr.io/tigerbeetle/tigerbeetle:' "$compose_file" >/dev/null
   grep -F 'tigerbeetle format' "$compose_file" >/dev/null
   grep -F 'tigerbeetle start' "$compose_file" >/dev/null
+  grep -F 'tigerbeetle amqp' "$compose_file" >/dev/null
+  grep -F 'rabbitmq:' "$compose_file" >/dev/null
   grep -F 'seccomp=unconfined' "$compose_file" >/dev/null
   grep -F 'volumes:' "$compose_file" >/dev/null
 }
@@ -140,9 +226,8 @@ verify_compose_publish() {
 if [[ "$run_containers" == true ]]; then
   command -v curl >/dev/null
   command -v jq >/dev/null
-  run_sample \
-    samples/CSharp/Aspire.TigerBeetle.Sample.CSharp.AppHost/Aspire.TigerBeetle.Sample.CSharp.AppHost.csproj \
-    client
+  run_cdc_sample \
+    samples/CSharp/Aspire.TigerBeetle.Sample.CSharp.AppHost/Aspire.TigerBeetle.Sample.CSharp.AppHost.csproj
   run_sample samples/TypeScript client
   verify_compose_publish
 fi

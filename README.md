@@ -1,6 +1,6 @@
 # Aspire hosting integration for TigerBeetle
 
-`Shirubasoft.Aspire.Hosting.TigerBeetle` adds a TigerBeetle replica to an Aspire AppHost as a custom container resource. It handles first-run formatting, polyglot connection properties, a TCP health check, persistent storage helpers, TypeScript AppHost exports, and Aspire container publication.
+`Shirubasoft.Aspire.Hosting.TigerBeetle` adds a TigerBeetle replica and optional RabbitMQ change data capture job to an Aspire AppHost as custom container resources. It handles first-run formatting, polyglot connection properties, a TCP health check, persistent storage helpers, TypeScript AppHost exports, and Aspire container publication.
 
 The package uses TigerBeetle `0.17.9` by default and targets Aspire `13.5.2` on .NET 10.
 
@@ -85,6 +85,59 @@ var tigerBeetle = builder.AddTigerBeetle("tigerbeetle", port: 3000)
 ```
 
 The complete C# AppHost sample is in [`samples/CSharp/Aspire.TigerBeetle.Sample.CSharp.AppHost/Program.cs`](samples/CSharp/Aspire.TigerBeetle.Sample.CSharp.AppHost/Program.cs).
+
+## Change data capture
+
+TigerBeetle can publish transfers and balance changes to a pre-existing AMQP 0.9.1 exchange. Add the CDC job from its TigerBeetle parent resource:
+
+```csharp
+var rabbitMq = builder.AddRabbitMQ("rabbitmq");
+
+var client = builder.AddProject<Projects.LedgerApi>("ledger-api")
+    .WithReference(tigerBeetle)
+    .WithReference(rabbitMq)
+    .WaitFor(tigerBeetle)
+    .WaitFor(rabbitMq)
+    .WithHttpHealthCheck("/health");
+
+tigerBeetle.AddChangeDataCapture(
+        "tigerbeetle-cdc",
+        rabbitMq,
+        "tigerbeetle")
+    .WaitFor(client)
+    .WithPublishRoutingKey("transfers")
+    .WithCdcArgs("--event-count-max=100", "--idle-interval-ms=250");
+```
+
+The CDC resource is a child of TigerBeetle and always waits for TigerBeetle. The RabbitMQ overload also waits for RabbitMQ. In this example the client declares the exchange and queue before its health check succeeds, so waiting for the client prevents CDC from racing the topology declaration.
+
+Use any `IResourceWithConnectionString` when RabbitMQ is managed outside the AppHost:
+
+```csharp
+var rabbitMq = builder.AddConnectionString("rabbitmq");
+
+tigerBeetle.AddChangeDataCapture(
+    "tigerbeetle-cdc",
+    rabbitMq,
+    "tigerbeetle");
+```
+
+This overload adds a reference relationship but does not add `WaitFor`. The connection string must be an `amqp://` or `amqps://` URI. Missing credentials default to `guest`/`guest`, missing ports default to `5672` for AMQP and `5671` for AMQPS, and a missing virtual-host path defaults to `/`. URI-escaped credentials and virtual hosts are decoded. Query and fragment components are ignored.
+
+TigerBeetle CDC does not implement AMQP TLS. An `amqps://` URI logs a warning and uses the parsed host and port without TLS. Put a TLS tunnel between the CDC container and RabbitMQ for secure connections.
+
+The equivalent generated TypeScript API accepts either a RabbitMQ resource or a generic connection-string resource:
+
+```typescript
+const rabbitMq = builder.addRabbitMQ('rabbitmq');
+
+await tigerBeetle
+  .addChangeDataCapture('tigerbeetle-cdc', rabbitMq, 'tigerbeetle')
+  .withTimestampLast('0')
+  .withCdcArgs(['--event-count-max=100']);
+```
+
+CDC uses at-least-once delivery. Consumers must handle duplicate events. `WithTimestampLast("0")` replays all available events, while omitting it resumes from the timestamp last acknowledged by RabbitMQ.
 
 ## TypeScript AppHost
 
@@ -205,6 +258,11 @@ The C# names appear in PascalCase. Aspire exports equivalent camelCase methods t
 | `WithStatsD(ipAddress, port)` | Port `8125` | Enables TigerBeetle's experimental StatsD output with `--experimental --statsd=...`. The host must be a numeric IP |
 | `WithFormatArgument(argument)` | None | Appends one shell-quoted raw argument to `tigerbeetle format` |
 | `WithStartArgument(argument)` | None | Appends one shell-quoted raw argument to `tigerbeetle start` |
+| `AddChangeDataCapture(name, rabbitMq, publishExchange)` | Required exchange | Adds a child `tigerbeetle amqp` container. The RabbitMQ overload waits for RabbitMQ; the generic connection-string overload adds only a reference relationship |
+| `WithVirtualHost(virtualHost)` | Parsed URI path or `/` | Overrides the AMQP virtual host parsed from the connection string |
+| `WithPublishRoutingKey(routingKey)` | None | Adds `--publish-routing-key` |
+| `WithTimestampLast(timestamp)` | Last acknowledged timestamp | Sets the unsigned 64-bit resume timestamp. C# accepts `ulong` or a decimal string; TypeScript accepts a decimal string |
+| `WithCdcArgs(args)` | None | Appends shell-quoted raw arguments after the integration-owned `tigerbeetle amqp` options |
 
 TypeScript represents optional .NET parameters as options objects. For example:
 
@@ -285,7 +343,7 @@ aspire wait tigerbeetle \
   --non-interactive
 ```
 
-The client URL appears in the Aspire dashboard. `GET /` returns the injected cluster ID and addresses. `GET /accounts/1` performs a TigerBeetle account lookup.
+The client URL appears in the Aspire dashboard. `GET /` returns the injected cluster ID and addresses. `GET /accounts/1` performs a TigerBeetle account lookup. `POST /transfers` creates a transfer and `GET /cdc/events` returns the most recent 100 events consumed from the durable sample queue.
 
 Prepare and start the TypeScript sample:
 
@@ -375,6 +433,7 @@ dotnet test Aspire.TigerBeetle.slnx --configuration Release --no-build
 
 - [TigerBeetle 0.17.9 release](https://github.com/tigerbeetle/tigerbeetle/releases/tag/0.17.9)
 - [TigerBeetle quick start](https://docs.tigerbeetle.com/start/)
+- [Change data capture](https://docs.tigerbeetle.com/operating/cdc/)
 - [Official Docker image and container guidance](https://docs.tigerbeetle.com/operating/deploying/docker/)
 - [Deployment procedure](https://docs.tigerbeetle.com/operating/deploying/)
 - [Production cluster recommendations](https://docs.tigerbeetle.com/operating/cluster/)

@@ -8,11 +8,24 @@ var tigerBeetle = builder.AddTigerBeetle("tigerbeetle")
         service.SecurityOpt.Add("seccomp=unconfined");
     });
 
-builder.AddProject<Projects.Aspire_TigerBeetle_Sample_CSharp_Client>("client")
+var rabbitMq = builder.AddRabbitMQ("rabbitmq")
+    .WithManagementPlugin();
+
+var client = builder.AddProject<Projects.Aspire_TigerBeetle_Sample_CSharp_Client>("client")
     .WithReference(tigerBeetle)
+    .WithReference(rabbitMq)
     .WaitFor(tigerBeetle)
+    .WaitFor(rabbitMq)
     .WithHttpEndpoint()
+    .WithHttpHealthCheck("/health")
     .WithExternalHttpEndpoints();
+
+tigerBeetle.AddChangeDataCapture("tigerbeetle-cdc", rabbitMq, "tigerbeetle")
+    .WaitFor(client)
+    .PublishAsDockerComposeService((_, service) =>
+    {
+        service.SecurityOpt.Add("seccomp=unconfined");
+    });
 
 builder.AddDockerComposeEnvironment("docker");
 

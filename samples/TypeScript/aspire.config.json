@@ -5,6 +5,7 @@
   },
   "packages": {
     "Aspire.Hosting.JavaScript": "13.5.2",
+    "Aspire.Hosting.RabbitMQ": "13.5.2",
     "Shirubasoft.Aspire.Hosting.TigerBeetle": "../../src/Aspire.Hosting.TigerBeetle/Aspire.Hosting.TigerBeetle.csproj"
   }
 }

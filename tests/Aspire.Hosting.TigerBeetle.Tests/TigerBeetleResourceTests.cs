@@ -12,6 +12,254 @@ namespace Aspire.Hosting.TigerBeetle.Tests;
 public sealed class TigerBeetleResourceTests
 {
     [Fact]
+    public async Task AddChangeDataCaptureConfiguresAChildRabbitMqPublisher()
+    {
+        var builder = DistributedApplication.CreateBuilder();
+        var tigerBeetle = builder.AddTigerBeetle("tigerbeetle")
+            .WithEndpoint(TigerBeetleResource.PrimaryEndpointName, endpoint =>
+                endpoint.AllocatedEndpoint = new AllocatedEndpoint(endpoint, "127.0.0.1", 4567));
+        var rabbitMq = builder.AddRabbitMQ("rabbitmq")
+            .WithEndpoint("tcp", endpoint =>
+                endpoint.AllocatedEndpoint = new AllocatedEndpoint(endpoint, "127.0.0.1", 5672));
+
+        var cdc = tigerBeetle.AddChangeDataCapture(
+            "tigerbeetle-cdc",
+            rabbitMq,
+            "tigerbeetle");
+
+        Assert.Same(tigerBeetle.Resource, cdc.Resource.TigerBeetle);
+        Assert.Same(rabbitMq.Resource, cdc.Resource.AmqpConnection);
+        Assert.Equal("tigerbeetle", cdc.Resource.PublishExchange);
+        Assert.Null(cdc.Resource.VirtualHost);
+
+        var image = Assert.Single(cdc.Resource.Annotations.OfType<ContainerImageAnnotation>());
+        Assert.Equal("ghcr.io", image.Registry);
+        Assert.Equal("tigerbeetle/tigerbeetle", image.Image);
+        Assert.Equal("0.17.9", image.Tag);
+        Assert.Equal("/bin/sh", cdc.Resource.Entrypoint);
+
+        var arguments = await cdc.Resource.GetArgumentValuesAsync();
+        Assert.Equal("-ec", arguments[0]);
+        Assert.Contains("exec /sbin/tini -- /tigerbeetle amqp", arguments[1]);
+        Assert.Contains("--addresses=\"$tigerbeetle_addresses\"", arguments[1]);
+        Assert.Contains("--cluster='0'", arguments[1]);
+        Assert.Contains("--host=\"$amqp_host\"", arguments[1]);
+        Assert.Contains("--vhost=\"$amqp_vhost\"", arguments[1]);
+        Assert.Contains("--publish-exchange='tigerbeetle'", arguments[1]);
+        Assert.Contains("getent ahostsv4", arguments[1]);
+        Assert.Contains(
+            "TigerBeetle CDC starting: cluster=%s addresses=%s amqp_host=%s vhost=%s publish_exchange=%s",
+            arguments[1]);
+        Assert.True(
+            arguments[1].IndexOf("TigerBeetle CDC starting", StringComparison.Ordinal) <
+            arguments[1].IndexOf("exec /sbin/tini -- /tigerbeetle amqp", StringComparison.Ordinal));
+
+        var runtimeArgs = Assert.Single(cdc.Resource.Annotations.OfType<ContainerRuntimeArgsCallbackAnnotation>());
+        var values = new List<object>();
+        await runtimeArgs.Callback(new ContainerRuntimeArgsCallbackContext(values));
+        Assert.Equal(["--security-opt", "seccomp=unconfined"], values);
+
+        var relationships = cdc.Resource.Annotations.OfType<ResourceRelationshipAnnotation>();
+        Assert.Contains(relationships, annotation =>
+            ReferenceEquals(annotation.Resource, tigerBeetle.Resource) &&
+            annotation.Type == "Parent");
+        Assert.Contains(relationships, annotation =>
+            ReferenceEquals(annotation.Resource, tigerBeetle.Resource) &&
+            annotation.Type == "WaitFor");
+        Assert.Contains(relationships, annotation =>
+            ReferenceEquals(annotation.Resource, rabbitMq.Resource) &&
+            annotation.Type == "Reference");
+        Assert.Contains(relationships, annotation =>
+            ReferenceEquals(annotation.Resource, rabbitMq.Resource) &&
+            annotation.Type == "WaitFor");
+    }
+
+    [Fact]
+    public async Task ChangeDataCaptureConfigurationMethodsAffectTheAmqpCommandInOrder()
+    {
+        var builder = DistributedApplication.CreateBuilder();
+        var tigerBeetle = builder.AddTigerBeetle("tigerbeetle")
+            .WithClusterId("340282366920938463463374607431768211455");
+        var rabbitMq = builder.AddRabbitMQ("rabbitmq");
+        var cdc = tigerBeetle.AddChangeDataCapture(
+                "tigerbeetle-cdc",
+                rabbitMq,
+                "ledger-events")
+            .WithVirtualHost("ledger")
+            .WithPublishRoutingKey("transfers")
+            .WithTimestampLast("1")
+            .WithTimestampLast(ulong.MaxValue)
+            .WithCdcArgs("--event-count-max=100", "--idle-interval-ms=250");
+
+        var arguments = await cdc.Resource.GetArgumentValuesAsync();
+        var script = arguments[1];
+
+        Assert.Contains("--cluster='340282366920938463463374607431768211455'", script);
+        Assert.Contains("amqp_vhost='ledger'", script);
+        Assert.Contains("--publish-exchange='ledger-events'", script);
+        Assert.Contains("--publish-routing-key='transfers'", script);
+        Assert.Contains("--timestamp-last='18446744073709551615'", script);
+        Assert.EndsWith("'--event-count-max=100' '--idle-interval-ms=250'", script, StringComparison.Ordinal);
+        Assert.True(
+            script.IndexOf("--timestamp-last", StringComparison.Ordinal) <
+            script.IndexOf("--event-count-max", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AddChangeDataCaptureAcceptsAGenericConnectionStringWithoutAddingAWait()
+    {
+        var builder = DistributedApplication.CreateBuilder();
+        var tigerBeetle = builder.AddTigerBeetle("tigerbeetle")
+            .WithEndpoint(TigerBeetleResource.PrimaryEndpointName, endpoint =>
+                endpoint.AllocatedEndpoint = new AllocatedEndpoint(endpoint, "127.0.0.1", 4567));
+        var rabbitMq = builder.AddConnectionString(
+            "rabbitmq",
+            ReferenceExpression.Create($"amqp://alice:secret@rabbit.example:5678/%2F?heartbeat=30#ignored"));
+
+        var cdc = tigerBeetle.AddChangeDataCapture(
+            "tigerbeetle-cdc",
+            rabbitMq,
+            "tigerbeetle-events");
+
+        var environment = new Dictionary<string, object>();
+        var context = new EnvironmentCallbackContext(builder.ExecutionContext, cdc.Resource, environment);
+        foreach (var annotation in cdc.Resource.Annotations.OfType<EnvironmentCallbackAnnotation>())
+        {
+            await annotation.Callback(context);
+        }
+
+        Assert.Same(
+            rabbitMq.Resource.ConnectionStringExpression,
+            environment[TigerBeetleChangeDataCaptureResourceBuilderExtensions.AmqpUriEnvironmentVariable]);
+
+        var relationships = cdc.Resource.Annotations.OfType<ResourceRelationshipAnnotation>();
+        Assert.Contains(relationships, annotation =>
+            ReferenceEquals(annotation.Resource, rabbitMq.Resource) &&
+            annotation.Type == "Reference");
+        Assert.DoesNotContain(relationships, annotation =>
+            ReferenceEquals(annotation.Resource, rabbitMq.Resource) &&
+            annotation.Type == "WaitFor");
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData(" ")]
+    public void AddChangeDataCaptureRejectsAMissingPublishExchange(string? exchange)
+    {
+        var builder = DistributedApplication.CreateBuilder();
+        var tigerBeetle = builder.AddTigerBeetle("tigerbeetle");
+        var rabbitMq = builder.AddRabbitMQ("rabbitmq");
+
+        Assert.ThrowsAny<ArgumentException>(() => tigerBeetle.AddChangeDataCapture(
+            "tigerbeetle-cdc",
+            rabbitMq,
+            exchange!));
+    }
+
+    [Theory]
+    [InlineData("amqp://user%40name:p%3Ass@broker.example/%2F?heartbeat=30#ignored", "amqp", "broker.example", 5672, "user@name", "p:ss", "/", false)]
+    [InlineData("amqps://broker.example/ledger%2Fprimary?ignored=true", "amqps", "broker.example", 5671, "guest", "guest", "ledger/primary", true)]
+    [InlineData("amqp://broker.example:6000", "amqp", "broker.example", 6000, "guest", "guest", "/", false)]
+    public void ParseAmqpConnectionStringAppliesUriDefaultsAndDecoding(
+        string value,
+        string scheme,
+        string host,
+        int port,
+        string userName,
+        string password,
+        string virtualHost,
+        bool usesTls)
+    {
+        var connection = TigerBeetleChangeDataCaptureResourceBuilderExtensions.ParseAmqpConnectionString(value);
+
+        Assert.Equal(scheme, connection.Scheme);
+        Assert.Equal(host, connection.Host);
+        Assert.Equal(port, connection.Port);
+        Assert.Equal(userName, connection.UserName);
+        Assert.Equal(password, connection.Password);
+        Assert.Equal(virtualHost, connection.VirtualHost);
+        Assert.Equal(usesTls, connection.UsesTls);
+    }
+
+    [Theory]
+    [InlineData("http://rabbit.example")]
+    [InlineData("amqp:///ledger")]
+    [InlineData("not-a-uri")]
+    public void ParseAmqpConnectionStringRejectsUnsupportedValues(string value)
+    {
+        Assert.Throws<DistributedApplicationException>(() =>
+            TigerBeetleChangeDataCaptureResourceBuilderExtensions.ParseAmqpConnectionString(value));
+    }
+
+    [Fact]
+    public async Task ChangeDataCaptureCommandShellQuotesConfiguredValues()
+    {
+        var builder = DistributedApplication.CreateBuilder();
+        var cdc = builder.AddTigerBeetle("tigerbeetle")
+            .AddChangeDataCapture(
+                "tigerbeetle-cdc",
+                builder.AddRabbitMQ("rabbitmq"),
+                "ledger's-events")
+            .WithVirtualHost("ledger's-vhost")
+            .WithPublishRoutingKey("ledger's-routing-key")
+            .WithCdcArgs("--custom=ledger's-value");
+
+        var arguments = await cdc.Resource.GetArgumentValuesAsync();
+        var script = arguments[1];
+
+        Assert.Contains("amqp_vhost='ledger'\"'\"'s-vhost'", script);
+        Assert.Contains("--publish-exchange='ledger'\"'\"'s-events'", script);
+        Assert.Contains("--publish-routing-key='ledger'\"'\"'s-routing-key'", script);
+        Assert.EndsWith("'--custom=ledger'\"'\"'s-value'", script, StringComparison.Ordinal);
+        Assert.Contains("WARNING: TigerBeetle CDC does not support native AMQP TLS", script);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("-1")]
+    [InlineData("18446744073709551616")]
+    [InlineData("not-a-timestamp")]
+    public void WithTimestampLastRejectsInvalidValues(string timestamp)
+    {
+        var builder = DistributedApplication.CreateBuilder();
+        var cdc = builder.AddTigerBeetle("tigerbeetle").AddChangeDataCapture(
+            "tigerbeetle-cdc",
+            builder.AddRabbitMQ("rabbitmq"),
+            "tigerbeetle");
+
+        Assert.Throws<ArgumentException>(() => cdc.WithTimestampLast(timestamp));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(" ")]
+    public void CdcStringConfigurationRejectsBlankValues(string value)
+    {
+        var builder = DistributedApplication.CreateBuilder();
+        var cdc = builder.AddTigerBeetle("tigerbeetle").AddChangeDataCapture(
+            "tigerbeetle-cdc",
+            builder.AddRabbitMQ("rabbitmq"),
+            "tigerbeetle");
+
+        Assert.Throws<ArgumentException>(() => cdc.WithVirtualHost(value));
+        Assert.Throws<ArgumentException>(() => cdc.WithPublishRoutingKey(value));
+        Assert.Throws<ArgumentException>(() => cdc.WithCdcArgs(value));
+    }
+
+    [Fact]
+    public void WithCdcArgsRejectsANullArray()
+    {
+        var builder = DistributedApplication.CreateBuilder();
+        var cdc = builder.AddTigerBeetle("tigerbeetle").AddChangeDataCapture(
+            "tigerbeetle-cdc",
+            builder.AddRabbitMQ("rabbitmq"),
+            "tigerbeetle");
+
+        Assert.Throws<ArgumentNullException>(() => cdc.WithCdcArgs(null!));
+    }
+
+    [Fact]
     public async Task AddTigerBeetleConfiguresAWorkingDevelopmentContainer()
     {
         var builder = DistributedApplication.CreateBuilder();

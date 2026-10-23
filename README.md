@@ -1,5 +1,10 @@
 # Aspire hosting integration for TigerBeetle
 
+> [!IMPORTANT]
+> This repository is archived. `Shirubasoft.Aspire.Hosting.TigerBeetle` is now developed in
+> [shirubasoft/aspire-extensions](https://github.com/shirubasoft/aspire-extensions/tree/main/extensions/Shirubasoft.Aspire.Extensions.TigerBeetle),
+> which publishes new versions under the same package ID. Open issues and pull requests there.
+
 `Shirubasoft.Aspire.Hosting.TigerBeetle` adds a TigerBeetle replica and optional RabbitMQ change data capture job to an Aspire AppHost as custom container resources. It handles first-run formatting, polyglot connection properties, a TCP health check, persistent storage helpers, TypeScript AppHost exports, and Aspire container publication.
 
 The package uses TigerBeetle `0.17.9` by default and targets Aspire `13.5.2` on .NET 10.
